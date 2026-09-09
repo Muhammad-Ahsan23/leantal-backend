@@ -4,10 +4,12 @@ namespace App\Http\Controllers\Api\Auth;
 
 use App\Http\Controllers\Controller;
 use App\Http\Requests\Auth\LoginRequest;
+use App\Http\Requests\Auth\RefreshTokenRequest;
 use App\Http\Requests\Auth\VerifyOtpRequest;
 use App\Models\User;
 use App\Services\CaptchaService;
 use App\Services\OtpService;
+use App\Services\RefreshTokenService;
 use App\Services\RegionResolver;
 use App\Services\RegionRoutingRepository;
 use Illuminate\Http\Request;
@@ -18,10 +20,17 @@ use Illuminate\Support\Facades\RateLimiter;
 
 class LoginController extends Controller
 {
+    // Access tokens are short-lived on purpose — the refresh token is what
+    // actually carries the 30-day session (Section 15); the access token
+    // just limits how long a stolen one stays useful before it expires and
+    // a refresh is required.
+    protected const ACCESS_TOKEN_MINUTES = 15;
+
     public function __construct(
         protected CaptchaService $captcha,
         protected RegionRoutingRepository $routing,
         protected OtpService $otp,
+        protected RefreshTokenService $refreshTokens,
     ) {}
 
     /**
@@ -32,9 +41,6 @@ class LoginController extends Controller
     {
         $email = strtolower(trim($request->input('email')));
 
-        // "Rate-limit login attempts" (Section 15) — keyed by email, not just
-        // IP, so one attacker can't brute-force a single account from many IPs
-        // without also tripping this.
         $throttleKey = 'login:'.$email;
         if (RateLimiter::tooManyAttempts($throttleKey, 5)) {
             return response()->json([
@@ -46,8 +52,6 @@ class LoginController extends Controller
             return response()->json(['message' => 'CAPTCHA verification failed.'], 422);
         }
 
-        // Login has no company selector — region must be resolved from the
-        // email alone via routing_db (see RegionRoutingRepository).
         $region = $this->routing->findRegionByEmail($email);
 
         if (!$region) {
@@ -65,31 +69,36 @@ class LoginController extends Controller
 
         if (!Hash::check($request->input('password'), $user->password_hash)) {
             RateLimiter::hit($throttleKey, 60);
-            Log::info('Failed login attempt', ['email' => $email]); // Section 15: "Log security events"
+            Log::info('Failed login attempt', ['email' => $email]);
             return $this->invalidCredentials();
         }
 
         RateLimiter::clear($throttleKey);
 
+        $otpSendKey = 'otp-send:'.$email;
+        if (RateLimiter::tooManyAttempts($otpSendKey, 3)) {
+            return response()->json([
+                'message' => 'Too many verification codes requested. Please wait a few minutes and try again.',
+            ], 429);
+        }
+        RateLimiter::hit($otpSendKey, 300);
+
         $code = $this->otp->generate($user, $connection);
 
-        // Sent via SMTP (Mailtrap, for now — real transport TBD once
-        // Amazon SES per project notes is wired up). Mail::raw() keeps
-        // this simple for now; swap for a Mailable + template later if
-        // the email needs richer formatting (branding, HTML layout, etc).
         Mail::raw("Your LeanTal verification code is: {$code}\n\nThis code expires in 10 minutes.", function ($message) use ($email) {
             $message->to($email)->subject('Your LeanTal verification code');
         });
 
         return response()->json([
             'message' => 'A verification code has been sent to your email.',
-            'email' => $email, // client needs to resubmit this in step 2
+            'email' => $email,
         ]);
     }
 
     /**
      * STEP 2 (PRD Section 15, steps 6-8): verify the emailed code, then
-     * actually log the user in.
+     * actually log the user in — issues a short-lived access token plus a
+     * rotating refresh token that carries the real 30-day session.
      */
     public function verifyOtp(VerifyOtpRequest $request)
     {
@@ -124,16 +133,94 @@ class LoginController extends Controller
         RateLimiter::clear($throttleKey);
 
         $user->forceFill(['last_login_at' => now()])->save();
+        Log::info('Successful login', ['email' => $email]);
 
-        // Session/token: using Sanctum's own token issuance + revocation
-        // (native "logout from all devices" via $user->tokens()->delete())
-        // rather than our bespoke `sessions` table — see MIGRATION notes.
-        // Section 15's 30-day lifetime is set in config/sanctum.php.
-        $token = $user->createToken('login')->plainTextToken;
+        return $this->issueTokens($user, $region, $connection, $request);
+    }
+
+    /**
+     * Exchanges a valid, unused refresh token for a new access token AND a
+     * new refresh token (rotation) — the old refresh token stops working
+     * the moment this succeeds. Called by the frontend automatically
+     * whenever the 15-minute access token expires, invisibly to the user.
+     */
+    public function refresh(RefreshTokenRequest $request)
+    {
+        $result = $this->refreshTokens->rotate(
+            $request->input('refresh_token'),
+            $request->userAgent(),
+            $request->ip(),
+        );
+
+        if (!$result) {
+            return response()->json([
+                'message' => 'Your session has expired. Please log in again.',
+            ], 401);
+        }
+
+        $accessTokenResult = $result['user']->createToken(
+            'access',
+            ['*'],
+            now()->addMinutes(self::ACCESS_TOKEN_MINUTES)
+        );
+        $accessTokenResult->accessToken->forceFill(['region' => $result['region']])->save();
+        $accessToken = $accessTokenResult->plainTextToken;
+
+        return response()->json([
+            'access_token' => $accessToken,
+            'refresh_token' => $result['refresh_token'],
+            'expires_in' => self::ACCESS_TOKEN_MINUTES * 60,
+        ]);
+    }
+
+    /**
+     * Logs out the CURRENT device only. Revokes the access token used in
+     * this request, and — if the client sends it — the paired refresh
+     * token, so this one device's session is fully ended.
+     */
+    public function logout(Request $request)
+    {
+        $request->user()->currentAccessToken()->delete();
+
+        if ($request->filled('refresh_token')) {
+            $this->refreshTokens->revoke($request->input('refresh_token'));
+        }
+
+        return response()->json(['message' => 'Logged out.']);
+    }
+
+    /**
+     * PRD Section 15 — "Logout from all devices." Revokes every access
+     * token AND every refresh token (session row) belonging to this user.
+     */
+    public function logoutAll(Request $request)
+    {
+        $user = $request->user();
+        $connection = $user->getConnectionName();
+
+        $user->tokens()->delete();
+        $this->refreshTokens->revokeAllForUser($connection, $user->id);
+
+        return response()->json(['message' => 'Logged out from all devices.']);
+    }
+
+    protected function issueTokens(User $user, string $region, string $connection, Request $request)
+    {
+        $accessTokenResult = $user->createToken(
+            'access',
+            ['*'],
+            now()->addMinutes(self::ACCESS_TOKEN_MINUTES)
+        );
+        $accessTokenResult->accessToken->forceFill(['region' => $region])->save();
+        $accessToken = $accessTokenResult->plainTextToken;
+
+        $refreshToken = $this->refreshTokens->generate($user, $region, $connection, $request->userAgent(), $request->ip());
 
         return response()->json([
             'message' => 'Logged in successfully.',
-            'token' => $token,
+            'access_token' => $accessToken,
+            'refresh_token' => $refreshToken,
+            'expires_in' => self::ACCESS_TOKEN_MINUTES * 60,
             'user' => [
                 'id' => $user->id,
                 'name' => $user->name,
@@ -144,32 +231,8 @@ class LoginController extends Controller
         ]);
     }
 
-    /**
-     * Logs out the CURRENT device only — revokes just the token used in
-     * this request, leaving other logged-in devices/sessions untouched.
-     */
-    public function logout(Request $request)
-    {
-        $request->user()->currentAccessToken()->delete();
-
-        return response()->json(['message' => 'Logged out.']);
-    }
-
-    /**
-     * PRD Section 15 — "Logout from all devices." Revokes every token
-     * belonging to this user, ending every active session everywhere.
-     */
-    public function logoutAll(Request $request)
-    {
-        $request->user()->tokens()->delete();
-
-        return response()->json(['message' => 'Logged out from all devices.']);
-    }
-
     protected function invalidCredentials()
     {
-        // Deliberately generic — never reveal whether the email exists,
-        // whether the password was wrong, or whether the account is inactive.
         return response()->json(['message' => 'Invalid email or password.'], 401);
     }
 

@@ -45,4 +45,19 @@ class Company extends Model
     {
         return $this->hasMany(User::class);
     }
+
+    /**
+     * PRD Section 90 — Plan Seat Enforcement.
+     * Returns null for unlimited (Scale plan).
+     */
+    public function seatLimit(): ?int
+    {
+        return match ($this->plan) {
+            'free' => 1,
+            'starter' => 3,
+            'team' => 15,
+            'scale' => null,
+            default => 1,
+        };
+    }
 }
