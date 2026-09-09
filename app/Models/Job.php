@@ -42,6 +42,16 @@ class Job extends Model
         return $this->belongsTo(User::class, 'created_by');
     }
 
+    public function pipelineStages()
+    {
+        return $this->hasMany(PipelineStage::class)->orderBy('order');
+    }
+
+    public function applicationQuestions()
+    {
+        return $this->hasMany(ApplicationQuestion::class)->orderBy('order');
+    }
+
     /**
      * PRD Section 142 (least privilege) — Owner/HM see every job in the
      * company; Recruiters see ONLY jobs assigned to them. This is the

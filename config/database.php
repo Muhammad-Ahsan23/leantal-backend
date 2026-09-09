@@ -47,6 +47,12 @@ return [
             'sslmode' => 'prefer',
         ],
 
+        // Local Phase 1 note: all four connections below can point at the
+        // SAME local 'leantal' database (as they do by default above) —
+        // that's fine for now. In production these become 3 physically
+        // separate clusters (see /areas/leantal-project data residency
+        // notes) plus one small shared server for routing_db + admin_db.
+
         'routing_db' => [
             'driver' => 'pgsql',
             'host' => env('DB_ROUTING_HOST', '127.0.0.1'),
@@ -90,6 +96,18 @@ return [
             'password' => env('REDIS_PASSWORD'),
             'port' => env('REDIS_PORT', '6379'),
             'database' => env('REDIS_DB', '0'),
+        ],
+
+        // Separate logical database index (1, not 0) so cache keys never
+        // collide with anything using the 'default' redis connection
+        // (queues, future pub/sub, etc.) — same physical Redis server.
+        'cache' => [
+            'url' => env('REDIS_URL'),
+            'host' => env('REDIS_HOST', '127.0.0.1'),
+            'username' => env('REDIS_USERNAME'),
+            'password' => env('REDIS_PASSWORD'),
+            'port' => env('REDIS_PORT', '6379'),
+            'database' => env('REDIS_CACHE_DB', '1'),
         ],
     ],
 

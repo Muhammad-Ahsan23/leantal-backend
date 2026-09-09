@@ -60,4 +60,14 @@ class Company extends Model
             default => 1,
         };
     }
+
+    /**
+     * PRD Section 91 — Job Limits. "Archived and closed jobs do not count
+     * against active limits" — implies draft/published/paused DO count,
+     * which is what JobService checks against this.
+     */
+    public function jobLimit(): ?int
+    {
+        return $this->plan === 'free' ? 1 : null;
+    }
 }
