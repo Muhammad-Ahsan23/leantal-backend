@@ -8,30 +8,39 @@ use App\Models\Candidate;
 use App\Models\Job;
 use App\Services\CandidateService;
 use Illuminate\Http\Request;
+use Illuminate\Support\Facades\Cache;
 
 class CandidateController extends Controller
 {
     public function __construct(protected CandidateService $candidates) {}
 
     /**
-     * PRD Section 142 — visibility scoped via Candidate::scopeVisibleTo()
-     * (Owner/HM see all, Recruiter sees only assigned), same pattern as Jobs.
+     * Same Redis caching pattern as JobController::index() — 60s TTL,
+     * tag-based per-company invalidation. Kept intentionally OUT of the
+     * Kanban board endpoint (ApplicationController::index()) though —
+     * that data needs to be live for multi-recruiter collaboration
+     * (Section 30), while this plain candidate list tolerates a
+     * 60-second staleness window fine.
      */
     public function index(Request $request)
     {
         $user = $request->user();
         $connection = $user->getConnectionName();
+        $search = $request->query('search');
+        $cacheKey = 'candidates:'.$user->id.':'.md5($search ?? '');
 
-        $query = Candidate::on($connection)->visibleTo($user)->with('assignedUser:id,name');
+        $candidates = Cache::tags(["company:{$user->company_id}:candidates"])->remember($cacheKey, 60, function () use ($user, $connection, $search) {
+            $query = Candidate::on($connection)->visibleTo($user)->with('assignedUser:id,name');
 
-        if ($search = $request->query('search')) {
-            $query->where(function ($q) use ($search) {
-                $q->where('name', 'ilike', "%{$search}%")
-                  ->orWhere('email', 'ilike', "%{$search}%");
-            });
-        }
+            if ($search) {
+                $query->where(function ($q) use ($search) {
+                    $q->where('name', 'ilike', "%{$search}%")
+                      ->orWhere('email', 'ilike', "%{$search}%");
+                });
+            }
 
-        $candidates = $query->orderByDesc('created_at')->get();
+            return $query->orderByDesc('created_at')->get();
+        });
 
         return response()->json(['candidates' => $candidates]);
     }

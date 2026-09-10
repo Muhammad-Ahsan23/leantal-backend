@@ -7,6 +7,7 @@ use App\Models\Candidate;
 use App\Models\Job;
 use App\Models\PipelineStage;
 use App\Models\User;
+use Illuminate\Support\Facades\Cache;
 use Illuminate\Support\Facades\DB;
 
 class CandidateService
@@ -26,7 +27,7 @@ class CandidateService
     {
         $normalizedEmail = strtolower(trim($data['email']));
 
-        return DB::connection($connection)->transaction(function () use ($data, $job, $actor, $connection, $normalizedEmail) {
+        $result = DB::connection($connection)->transaction(function () use ($data, $job, $actor, $connection, $normalizedEmail) {
             $candidate = Candidate::on($connection)
                 ->where('company_id', $job->company_id)
                 ->where('normalized_email', $normalizedEmail)
@@ -78,5 +79,9 @@ class CandidateService
 
             return [$candidate, $application];
         });
+
+        Cache::tags(["company:{$job->company_id}:candidates"])->flush();
+
+        return $result;
     }
 }
