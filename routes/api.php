@@ -1,9 +1,11 @@
 <?php
 
+use App\Http\Controllers\Api\ApplicationController;
 use App\Http\Controllers\Api\ApplicationQuestionController;
 use App\Http\Controllers\Api\Auth\LoginController;
 use App\Http\Controllers\Api\Auth\PasswordResetController;
 use App\Http\Controllers\Api\Auth\SignupController;
+use App\Http\Controllers\Api\CandidateController;
 use App\Http\Controllers\Api\JobController;
 use App\Http\Controllers\Api\PermissionsController;
 use App\Http\Controllers\Api\PipelineStageController;
@@ -49,6 +51,14 @@ Route::middleware('auth:sanctum')->group(function () {
     Route::patch('/jobs/{jobId}/questions/reorder', [ApplicationQuestionController::class, 'reorder']);
     Route::patch('/jobs/{jobId}/questions/{questionId}', [ApplicationQuestionController::class, 'update']);
     Route::delete('/jobs/{jobId}/questions/{questionId}', [ApplicationQuestionController::class, 'destroy']);
+
+    Route::get('/candidates', [CandidateController::class, 'index']);
+    Route::post('/candidates', [CandidateController::class, 'store']);
+    Route::get('/candidates/{id}', [CandidateController::class, 'show']);
+
+    Route::get('/jobs/{jobId}/applications', [ApplicationController::class, 'index']);
+    Route::get('/applications/{id}', [ApplicationController::class, 'show']);
+    Route::patch('/applications/{id}/stage', [ApplicationController::class, 'moveStage']);
 });
 
 // Public — no access token needed, the refresh token itself is the credential

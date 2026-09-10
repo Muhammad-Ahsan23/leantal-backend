@@ -34,6 +34,11 @@ class Candidate extends Model
         return $this->belongsTo(User::class, 'assigned_user_id');
     }
 
+    public function applications()
+    {
+        return $this->hasMany(Application::class);
+    }
+
     /**
      * PRD Section 142 — Recruiters are restricted to their assigned
      * candidates only; Owner/HM see every candidate in the company.
