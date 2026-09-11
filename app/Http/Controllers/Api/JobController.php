@@ -176,7 +176,7 @@ class JobController extends Controller
             return response()->json(['message' => 'That user was not found in your company.'], 422);
         }
 
-        $job = $this->jobs->assign($job, $targetUserId);
+        $job = $this->jobs->assign($job, $targetUserId, $connection);
 
         return response()->json(['job' => $job]);
     }

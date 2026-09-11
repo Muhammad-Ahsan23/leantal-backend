@@ -9,6 +9,7 @@ use App\Http\Controllers\Api\CandidateController;
 use App\Http\Controllers\Api\JobController;
 use App\Http\Controllers\Api\PermissionsController;
 use App\Http\Controllers\Api\PipelineStageController;
+use App\Http\Controllers\Api\TaskController;
 use App\Http\Controllers\Api\UserController;
 use Illuminate\Support\Facades\Route;
 
@@ -55,10 +56,22 @@ Route::middleware('auth:sanctum')->group(function () {
     Route::get('/candidates', [CandidateController::class, 'index']);
     Route::post('/candidates', [CandidateController::class, 'store']);
     Route::get('/candidates/{id}', [CandidateController::class, 'show']);
+    Route::patch('/candidates/{id}/archive', [CandidateController::class, 'archive']);
+    Route::delete('/candidates/{id}', [CandidateController::class, 'destroy']);
+    Route::post('/candidates/{id}/assign', [CandidateController::class, 'assign']);
+    Route::get('/candidates/{id}/notes', [CandidateController::class, 'listNotes']);
+    Route::post('/candidates/{id}/notes', [CandidateController::class, 'addNote']);
+    Route::get('/candidates/{id}/activity', [CandidateController::class, 'activity']);
 
     Route::get('/jobs/{jobId}/applications', [ApplicationController::class, 'index']);
     Route::get('/applications/{id}', [ApplicationController::class, 'show']);
     Route::patch('/applications/{id}/stage', [ApplicationController::class, 'moveStage']);
+
+    Route::get('/tasks', [TaskController::class, 'index']);
+    Route::post('/tasks', [TaskController::class, 'store']);
+    Route::get('/tasks/{id}', [TaskController::class, 'show']);
+    Route::patch('/tasks/{id}/status', [TaskController::class, 'updateStatus']);
+    Route::delete('/tasks/{id}', [TaskController::class, 'destroy']);
 });
 
 // Public — no access token needed, the refresh token itself is the credential

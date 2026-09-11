@@ -5,10 +5,12 @@ namespace App\Services;
 use App\Models\Application;
 use App\Models\Candidate;
 use App\Models\Job;
+use App\Models\Note;
 use App\Models\PipelineStage;
 use App\Models\User;
 use Illuminate\Support\Facades\Cache;
 use Illuminate\Support\Facades\DB;
+use Illuminate\Support\Str;
 
 class CandidateService
 {
@@ -26,8 +28,9 @@ class CandidateService
     public function addToJob(array $data, Job $job, User $actor, string $connection): array
     {
         $normalizedEmail = strtolower(trim($data['email']));
+        $isNewCandidate = false;
 
-        $result = DB::connection($connection)->transaction(function () use ($data, $job, $actor, $connection, $normalizedEmail) {
+        $result = DB::connection($connection)->transaction(function () use ($data, $job, $actor, $connection, $normalizedEmail, &$isNewCandidate) {
             $candidate = Candidate::on($connection)
                 ->where('company_id', $job->company_id)
                 ->where('normalized_email', $normalizedEmail)
@@ -50,6 +53,7 @@ class CandidateService
                     'assigned_user_id' => $actor->id,
                     'status' => 'active',
                 ]);
+                $isNewCandidate = true;
             }
 
             $existingActiveApplication = Application::on($connection)
@@ -77,11 +81,100 @@ class CandidateService
                 'lock_version' => 1, // matches schema default (Section 98)
             ]);
 
+            $this->logActivity($connection, $job->company_id, $actor->id, 'candidate.added_to_job', 'application', $application->id, [
+                'candidate_name' => $candidate->name,
+                'job_title' => $job->title,
+                'new_candidate' => $isNewCandidate,
+            ]);
+
             return [$candidate, $application];
         });
 
-        Cache::tags(["company:{$job->company_id}:candidates"])->flush();
+        $this->forgetCandidatesCache($job->company_id);
 
         return $result;
+    }
+
+    /**
+     * @throws \RuntimeException if the candidate is not found (defensive — controller already checks)
+     */
+    public function addNote(Candidate $candidate, string $body, User $actor, string $connection): Note
+    {
+        $note = Note::on($connection)->create([
+            'candidate_id' => $candidate->id,
+            'author_id' => $actor->id,
+            'body' => $body,
+        ]);
+
+        $this->logActivity($connection, $candidate->company_id, $actor->id, 'candidate.note_added', 'candidate', $candidate->id, [
+            'candidate_name' => $candidate->name,
+        ]);
+
+        return $note;
+    }
+
+    /**
+     * PRD Section 37 — archive is reversible (status flag), unlike
+     * delete() below which is a soft-delete via deleted_at.
+     */
+    public function archive(Candidate $candidate, User $actor, string $connection): Candidate
+    {
+        $candidate->update(['status' => 'archived', 'archived_at' => now()]);
+
+        $this->logActivity($connection, $candidate->company_id, $actor->id, 'candidate.archived', 'candidate', $candidate->id, [
+            'candidate_name' => $candidate->name,
+        ]);
+
+        $this->forgetCandidatesCache($candidate->company_id);
+
+        return $candidate->fresh();
+    }
+
+    /**
+     * PRD Section 37 — soft-delete only (deleted_at), never a hard DELETE
+     * — historical application/activity data must be preserved regardless.
+     */
+    public function softDelete(Candidate $candidate, User $actor, string $connection): void
+    {
+        $this->logActivity($connection, $candidate->company_id, $actor->id, 'candidate.deleted', 'candidate', $candidate->id, [
+            'candidate_name' => $candidate->name,
+        ]);
+
+        $candidate->delete(); // SoftDeletes trait — sets deleted_at, doesn't hard-remove the row
+
+        $this->forgetCandidatesCache($candidate->company_id);
+    }
+
+    public function assign(Candidate $candidate, string $newAssignedUserId, User $actor, string $connection): Candidate
+    {
+        $candidate->update(['assigned_user_id' => $newAssignedUserId]);
+
+        $this->logActivity($connection, $candidate->company_id, $actor->id, 'candidate.reassigned', 'candidate', $candidate->id, [
+            'candidate_name' => $candidate->name,
+            'new_assigned_user_id' => $newAssignedUserId,
+        ]);
+
+        $this->forgetCandidatesCache($candidate->company_id);
+
+        return $candidate->fresh();
+    }
+
+    protected function logActivity(string $connection, string $companyId, string $actorId, string $action, string $objectType, string $objectId, array $metadata = []): void
+    {
+        DB::connection($connection)->table('activity')->insert([
+            'id' => (string) Str::uuid(),
+            'company_id' => $companyId,
+            'actor_id' => $actorId,
+            'action' => $action,
+            'object_type' => $objectType,
+            'object_id' => $objectId,
+            'metadata' => json_encode($metadata),
+            'created_at' => now(),
+        ]);
+    }
+
+    protected function forgetCandidatesCache(string $companyId): void
+    {
+        Cache::tags(["company:{$companyId}:candidates"])->flush();
     }
 }

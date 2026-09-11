@@ -2,6 +2,8 @@
 
 namespace App\Services;
 
+use App\Models\Application;
+use App\Models\Candidate;
 use App\Models\Company;
 use App\Models\Job;
 use App\Models\PipelineStage;
@@ -109,10 +111,42 @@ class JobService
         return $job->fresh();
     }
 
-    public function assign(Job $job, string $assignedUserId): Job
+    /**
+     * Client feedback (confirmed): when a Job is reassigned, the new
+     * owner must see ALL prior activity — candidates, notes, stage
+     * history — not just the job itself. Since Candidate visibility is
+     * governed by its OWN assigned_user_id (separate from the job's),
+     * reassigning the job alone would leave the new recruiter locked out
+     * of every candidate still pointing at the old one. This cascades
+     * the candidate-level assignment too, for every candidate with ANY
+     * application to this job (active or historical — the new owner
+     * should see hired/rejected candidates' history too, not just
+     * currently-active ones).
+     *
+     * KNOWN EDGE CASE (documented, not silently ignored): if one of
+     * those candidates ALSO has an active application to a DIFFERENT
+     * job still owned by the old recruiter, this reassignment moves
+     * that candidate away from them for that other job too — our schema
+     * has one assigned_user_id per candidate, not per-application. Rare
+     * in practice; flag for the client if it becomes a real issue.
+     */
+    public function assign(Job $job, string $assignedUserId, string $connection): Job
     {
-        $job->update(['assigned_user_id' => $assignedUserId]);
+        DB::connection($connection)->transaction(function () use ($job, $assignedUserId, $connection) {
+            $job->update(['assigned_user_id' => $assignedUserId]);
+
+            $candidateIds = Application::on($connection)
+                ->where('job_id', $job->id)
+                ->pluck('candidate_id')
+                ->unique();
+
+            Candidate::on($connection)
+                ->whereIn('id', $candidateIds)
+                ->update(['assigned_user_id' => $assignedUserId]);
+        });
+
         $this->forgetJobsCache($job->company_id);
+        Cache::tags(["company:{$job->company_id}:candidates"])->flush();
 
         return $job->fresh();
     }

@@ -3,12 +3,17 @@
 namespace App\Http\Controllers\Api;
 
 use App\Http\Controllers\Controller;
+use App\Http\Requests\Candidates\AssignCandidateRequest;
 use App\Http\Requests\Candidates\CreateCandidateRequest;
+use App\Http\Requests\Candidates\CreateNoteRequest;
 use App\Models\Candidate;
 use App\Models\Job;
+use App\Models\Note;
+use App\Models\User;
 use App\Services\CandidateService;
 use Illuminate\Http\Request;
 use Illuminate\Support\Facades\Cache;
+use Illuminate\Support\Facades\DB;
 
 class CandidateController extends Controller
 {
@@ -94,5 +99,164 @@ class CandidateController extends Controller
             'candidate' => $candidate,
             'application' => $application,
         ], 201);
+    }
+
+    /**
+     * PRD Section 37 — reversible archive. Owner/HM only (CandidatePolicy).
+     */
+    public function archive(Request $request, string $id)
+    {
+        $user = $request->user();
+        $connection = $user->getConnectionName();
+        $candidate = Candidate::on($connection)->find($id);
+
+        if (!$candidate) {
+            return response()->json(['message' => 'Candidate not found.'], 404);
+        }
+
+        if (!$user->can('archive', $candidate)) {
+            return response()->json(['message' => 'You do not have permission to archive this candidate.'], 403);
+        }
+
+        $candidate = $this->candidates->archive($candidate, $user, $connection);
+
+        return response()->json(['candidate' => $candidate]);
+    }
+
+    /**
+     * PRD Section 37 — soft-delete only, never a hard DELETE from the DB.
+     * Owner/HM only (CandidatePolicy).
+     */
+    public function destroy(Request $request, string $id)
+    {
+        $user = $request->user();
+        $connection = $user->getConnectionName();
+        $candidate = Candidate::on($connection)->find($id);
+
+        if (!$candidate) {
+            return response()->json(['message' => 'Candidate not found.'], 404);
+        }
+
+        if (!$user->can('delete', $candidate)) {
+            return response()->json(['message' => 'You do not have permission to delete this candidate.'], 403);
+        }
+
+        $this->candidates->softDelete($candidate, $user, $connection);
+
+        return response()->json(['message' => 'Candidate deleted.']);
+    }
+
+    /**
+     * PRD Section 8 — reassigning a candidate to a different team member.
+     * Owner/HM only (CandidatePolicy) — matches "Assign candidate" in the
+     * permission matrix.
+     */
+    public function assign(AssignCandidateRequest $request, string $id)
+    {
+        $user = $request->user();
+        $connection = $user->getConnectionName();
+        $candidate = Candidate::on($connection)->find($id);
+
+        if (!$candidate) {
+            return response()->json(['message' => 'Candidate not found.'], 404);
+        }
+
+        if (!$user->can('assign', $candidate)) {
+            return response()->json(['message' => 'You do not have permission to reassign this candidate.'], 403);
+        }
+
+        $targetUserId = $request->validated()['assigned_user_id'];
+        $targetUser = User::on($connection)->where('company_id', $user->company_id)->find($targetUserId);
+
+        if (!$targetUser) {
+            return response()->json(['message' => 'That user was not found in your company.'], 422);
+        }
+
+        $candidate = $this->candidates->assign($candidate, $targetUserId, $user, $connection);
+
+        return response()->json(['candidate' => $candidate]);
+    }
+
+    /**
+     * PRD Section 36 — internal notes, never visible to the candidate.
+     * Same visibility rule as viewing the candidate itself — if a
+     * Recruiter can see this candidate (i.e. it's assigned to them),
+     * they can add/view notes on it.
+     */
+    public function listNotes(Request $request, string $id)
+    {
+        $user = $request->user();
+        $connection = $user->getConnectionName();
+        $candidate = Candidate::on($connection)->find($id);
+
+        if (!$candidate) {
+            return response()->json(['message' => 'Candidate not found.'], 404);
+        }
+
+        if (!$user->can('view', $candidate)) {
+            return response()->json(['message' => 'You do not have permission to view this candidate.'], 403);
+        }
+
+        $notes = Note::on($connection)->where('candidate_id', $id)
+            ->with('author:id,name')
+            ->orderByDesc('created_at')
+            ->get();
+
+        return response()->json(['notes' => $notes]);
+    }
+
+    public function addNote(CreateNoteRequest $request, string $id)
+    {
+        $user = $request->user();
+        $connection = $user->getConnectionName();
+        $candidate = Candidate::on($connection)->find($id);
+
+        if (!$candidate) {
+            return response()->json(['message' => 'Candidate not found.'], 404);
+        }
+
+        if (!$user->can('update', $candidate)) {
+            return response()->json(['message' => 'You do not have permission to add notes to this candidate.'], 403);
+        }
+
+        $note = $this->candidates->addNote($candidate, $request->validated()['body'], $user, $connection);
+
+        return response()->json(['note' => $note], 201);
+    }
+
+    /**
+     * PRD Section 38 — Application Activity Timeline. Pulls every
+     * activity row tied either directly to this candidate (e.g. notes,
+     * archive, reassignment) or to any of their applications (e.g. stage
+     * moves) — both were logged under different object_type values by
+     * CandidateService / ApplicationService.
+     */
+    public function activity(Request $request, string $id)
+    {
+        $user = $request->user();
+        $connection = $user->getConnectionName();
+        $candidate = Candidate::on($connection)->find($id);
+
+        if (!$candidate) {
+            return response()->json(['message' => 'Candidate not found.'], 404);
+        }
+
+        if (!$user->can('view', $candidate)) {
+            return response()->json(['message' => 'You do not have permission to view this candidate.'], 403);
+        }
+
+        $applicationIds = $candidate->applications()->pluck('id');
+
+        $activity = DB::connection($connection)->table('activity')
+            ->where(function ($q) use ($id, $applicationIds) {
+                $q->where(['object_type' => 'candidate', 'object_id' => $id])
+                  ->orWhere(function ($q2) use ($applicationIds) {
+                      $q2->where('object_type', 'application')->whereIn('object_id', $applicationIds);
+                  });
+            })
+            ->orderByDesc('created_at')
+            ->get();
+
+        return response()->json(['activity' => $activity]);
     }
 }
