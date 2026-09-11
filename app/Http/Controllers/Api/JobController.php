@@ -10,6 +10,7 @@ use App\Http\Requests\Jobs\UpdateJobStatusRequest;
 use App\Models\Job;
 use App\Models\User;
 use App\Services\JobService;
+use App\Support\CacheVersion;
 use Illuminate\Http\Request;
 use Illuminate\Support\Facades\Cache;
 use Illuminate\Support\Facades\DB;
@@ -34,9 +35,10 @@ class JobController extends Controller
         $connection = $user->getConnectionName();
 
         $filters = $request->only(['status', 'department', 'search', 'assigned_user_id']);
-        $cacheKey = 'jobs:'.$user->id.':'.md5(json_encode($filters));
+        $version = CacheVersion::get("company:{$user->company_id}:jobs");
+        $cacheKey = "jobs:v{$version}:".$user->id.':'.md5(json_encode($filters));
 
-        $jobs = Cache::tags(["company:{$user->company_id}:jobs"])->remember($cacheKey, 60, function () use ($user, $connection, $filters) {
+        $jobs = Cache::remember($cacheKey, 60, function () use ($user, $connection, $filters) {
             $query = Job::on($connection)->visibleTo($user)->with('assignedUser:id,name');
 
             if (!empty($filters['status'])) {

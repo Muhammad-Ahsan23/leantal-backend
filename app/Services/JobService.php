@@ -8,7 +8,7 @@ use App\Models\Company;
 use App\Models\Job;
 use App\Models\PipelineStage;
 use App\Models\User;
-use Illuminate\Support\Facades\Cache;
+use App\Support\CacheVersion;
 use Illuminate\Support\Facades\DB;
 
 class JobService
@@ -146,7 +146,7 @@ class JobService
         });
 
         $this->forgetJobsCache($job->company_id);
-        Cache::tags(["company:{$job->company_id}:candidates"])->flush();
+        CacheVersion::bump("company:{$job->company_id}:candidates");
 
         return $job->fresh();
     }
@@ -180,6 +180,6 @@ class JobService
      */
     protected function forgetJobsCache(string $companyId): void
     {
-        Cache::tags(["company:{$companyId}:jobs"])->flush();
+        CacheVersion::bump("company:{$companyId}:jobs");
     }
 }

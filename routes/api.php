@@ -9,6 +9,7 @@ use App\Http\Controllers\Api\CandidateController;
 use App\Http\Controllers\Api\JobController;
 use App\Http\Controllers\Api\PermissionsController;
 use App\Http\Controllers\Api\PipelineStageController;
+use App\Http\Controllers\Api\Public\PublicCareersController;
 use App\Http\Controllers\Api\TaskController;
 use App\Http\Controllers\Api\UserController;
 use Illuminate\Support\Facades\Route;
@@ -23,6 +24,11 @@ Route::post('/reset-password', [PasswordResetController::class, 'reset']);
 
 // Public — the invitation token itself is the credential, no login needed
 Route::post('/accept-invite', [UserController::class, 'acceptInvite']);
+
+// Public — candidate-facing careers page, completely unauthenticated
+Route::get('/public/careers/{companySlug}', [PublicCareersController::class, 'index']);
+Route::get('/public/careers/{companySlug}/jobs/{jobId}', [PublicCareersController::class, 'showJob']);
+Route::post('/public/careers/{companySlug}/jobs/{jobId}/apply', [PublicCareersController::class, 'apply']);
 
 // Protected routes — require a valid Sanctum bearer token
 Route::middleware('auth:sanctum')->group(function () {

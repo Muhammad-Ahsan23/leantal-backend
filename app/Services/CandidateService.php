@@ -8,7 +8,7 @@ use App\Models\Job;
 use App\Models\Note;
 use App\Models\PipelineStage;
 use App\Models\User;
-use Illuminate\Support\Facades\Cache;
+use App\Support\CacheVersion;
 use Illuminate\Support\Facades\DB;
 use Illuminate\Support\Str;
 
@@ -175,6 +175,6 @@ class CandidateService
 
     protected function forgetCandidatesCache(string $companyId): void
     {
-        Cache::tags(["company:{$companyId}:candidates"])->flush();
+        CacheVersion::bump("company:{$companyId}:candidates");
     }
 }

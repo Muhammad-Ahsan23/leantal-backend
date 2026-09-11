@@ -46,4 +46,23 @@ class RegionRoutingRepository
 
         return $row?->region;
     }
+
+    /**
+     * Public careers page URLs identify the company by SLUG, not email —
+     * same "resolve region before touching any regional DB" problem,
+     * different lookup key. Returns both region and company_id so the
+     * caller doesn't need a second round-trip.
+     */
+    public function findCompanyBySlug(string $slug): ?array
+    {
+        $row = DB::connection('routing_db')->table('company_region_lookup')
+            ->where('company_slug', $slug)
+            ->first();
+
+        if (!$row) {
+            return null;
+        }
+
+        return ['region' => $row->region, 'company_id' => $row->company_id];
+    }
 }

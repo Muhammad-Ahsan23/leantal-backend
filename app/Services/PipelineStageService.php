@@ -4,7 +4,7 @@ namespace App\Services;
 
 use App\Models\Job;
 use App\Models\PipelineStage;
-use Illuminate\Support\Facades\Cache;
+use App\Support\CacheVersion;
 use Illuminate\Support\Facades\DB;
 
 class PipelineStageService
@@ -152,7 +152,7 @@ class PipelineStageService
 
     protected function forgetJobCache(Job $job): void
     {
-        Cache::tags(["company:{$job->company_id}:jobs"])->flush();
+        CacheVersion::bump("company:{$job->company_id}:jobs");
     }
 
     protected function forgetJobCacheById(string $jobId, string $connection): void

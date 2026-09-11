@@ -11,6 +11,7 @@ use App\Models\Job;
 use App\Models\Note;
 use App\Models\User;
 use App\Services\CandidateService;
+use App\Support\CacheVersion;
 use Illuminate\Http\Request;
 use Illuminate\Support\Facades\Cache;
 use Illuminate\Support\Facades\DB;
@@ -32,9 +33,10 @@ class CandidateController extends Controller
         $user = $request->user();
         $connection = $user->getConnectionName();
         $search = $request->query('search');
-        $cacheKey = 'candidates:'.$user->id.':'.md5($search ?? '');
+        $version = CacheVersion::get("company:{$user->company_id}:candidates");
+        $cacheKey = "candidates:v{$version}:".$user->id.':'.md5($search ?? '');
 
-        $candidates = Cache::tags(["company:{$user->company_id}:candidates"])->remember($cacheKey, 60, function () use ($user, $connection, $search) {
+        $candidates = Cache::remember($cacheKey, 60, function () use ($user, $connection, $search) {
             $query = Candidate::on($connection)->visibleTo($user)->with('assignedUser:id,name');
 
             if ($search) {
