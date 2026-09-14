@@ -27,6 +27,7 @@ class PublicCareersController extends Controller
     public function __construct(
         protected RegionRoutingRepository $routing,
         protected PublicApplicationService $applications,
+        protected \App\Services\JobStructuredDataService $structuredData,
     ) {}
 
     /**
@@ -93,7 +94,21 @@ class PublicCareersController extends Controller
             ->orderBy('order')
             ->get(['id', 'question', 'type', 'required', 'options']);
 
-        return response()->json(['job' => $job, 'questions' => $questions]);
+        $companyModel = \App\Models\Company::on($connection)->find($company['company_id']);
+        $canonicalUrl = $this->structuredData->canonicalUrl($companySlug, $job->id);
+
+        return response()->json([
+            'job' => $job,
+            'questions' => $questions,
+            // PRD Section 50 — embed this AS-IS in a
+            // <script type="application/ld+json"> tag on the job page.
+            'structured_data' => $this->structuredData->build($job, $companySlug, $companyModel->name ?? ''),
+            // PRD Section 52 — social share buttons just need this URL;
+            // no backend logic needed beyond providing it. e.g.:
+            // LinkedIn: https://www.linkedin.com/sharing/share-offsite/?url={canonical_url}
+            // Twitter/X: https://twitter.com/intent/tweet?url={canonical_url}&text={job.title}
+            'canonical_url' => $canonicalUrl,
+        ]);
     }
 
     /**

@@ -13,6 +13,11 @@ use Illuminate\Support\Facades\DB;
 
 class JobService
 {
+    public function __construct(
+        protected GoogleIndexingService $googleIndexing,
+        protected JobStructuredDataService $structuredData,
+    ) {}
+
     /**
      * PRD Section 22/92 — only these transitions are allowed. Prevents
      * nonsensical jumps like Draft -> Closed or Archived -> Published
@@ -105,8 +110,26 @@ class JobService
             $updates['closed_at'] = now();
         }
 
+        $wasPublished = $job->status === 'published';
+
         $job->update($updates);
         $this->forgetJobsCache($job->company_id);
+
+        // PRD Section 51 — tell Google to (re)crawl this job's public
+        // page sooner. No-ops silently if Google credentials aren't
+        // configured (see GoogleIndexingService docblock).
+        $company = Company::on($connection)->find($job->company_id);
+        if ($company && $company->slug) {
+            $url = $this->structuredData->canonicalUrl($company->slug, $job->id);
+
+            if ($newStatus === 'published') {
+                $this->googleIndexing->notify($url, 'URL_UPDATED');
+            } elseif ($wasPublished) {
+                // Job just left Published (paused/closed) — tell Google
+                // to drop it from search results.
+                $this->googleIndexing->notify($url, 'URL_DELETED');
+            }
+        }
 
         return $job->fresh();
     }
