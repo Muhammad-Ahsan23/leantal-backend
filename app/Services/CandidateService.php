@@ -9,11 +9,14 @@ use App\Models\Note;
 use App\Models\PipelineStage;
 use App\Models\User;
 use App\Support\CacheVersion;
+use Illuminate\Http\UploadedFile;
 use Illuminate\Support\Facades\DB;
 use Illuminate\Support\Str;
 
 class CandidateService
 {
+    public function __construct(protected ResumeStorageService $resumeStorage) {}
+
     /**
      * PRD Section 41 — manually add a candidate to a job. Section 133 —
      * candidates are de-duplicated by normalized email WITHIN a company:
@@ -25,12 +28,13 @@ class CandidateService
      *
      * @throws \RuntimeException if the candidate already has an active application to this job
      */
-    public function addToJob(array $data, Job $job, User $actor, string $connection): array
+    public function addToJob(array $data, Job $job, User $actor, string $connection, ?UploadedFile $resume = null): array
     {
         $normalizedEmail = strtolower(trim($data['email']));
         $isNewCandidate = false;
+        $resumeMeta = $this->resumeStorage->store($resume, RegionResolver::regionForConnection($connection));
 
-        $result = DB::connection($connection)->transaction(function () use ($data, $job, $actor, $connection, $normalizedEmail, &$isNewCandidate) {
+        $result = DB::connection($connection)->transaction(function () use ($data, $job, $actor, $connection, $normalizedEmail, &$isNewCandidate, $resumeMeta) {
             $candidate = Candidate::on($connection)
                 ->where('company_id', $job->company_id)
                 ->where('normalized_email', $normalizedEmail)
@@ -52,8 +56,14 @@ class CandidateService
                     // Recruiters, who can only add/see their own anyway.
                     'assigned_user_id' => $actor->id,
                     'status' => 'active',
+                    ...($resumeMeta ?? []),
                 ]);
                 $isNewCandidate = true;
+            } elseif ($resumeMeta) {
+                // Existing candidate, but a NEW resume was attached this
+                // time (e.g. re-added for a different job) — refresh it
+                // rather than silently keeping the old one.
+                $candidate->update($resumeMeta);
             }
 
             $existingActiveApplication = Application::on($connection)

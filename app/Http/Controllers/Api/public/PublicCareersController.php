@@ -135,7 +135,7 @@ class PublicCareersController extends Controller
         }
 
         try {
-            $this->applications->submit($job, $data, $connection);
+            $this->applications->submit($job, $data, $connection, $request->file('resume'));
         } catch (DuplicateApplicationException $e) {
             return response()->json(['message' => $e->getMessage()], 422);
         }

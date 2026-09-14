@@ -92,7 +92,7 @@ class CandidateController extends Controller
         }
 
         try {
-            [$candidate, $application] = $this->candidates->addToJob($data, $job, $user, $connection);
+            [$candidate, $application] = $this->candidates->addToJob($data, $job, $user, $connection, $request->file('resume'));
         } catch (\RuntimeException $e) {
             return response()->json(['message' => $e->getMessage()], 422);
         }
@@ -205,6 +205,35 @@ class CandidateController extends Controller
             ->get();
 
         return response()->json(['notes' => $notes]);
+    }
+
+    /**
+     * R2 disks are private (never publicly browsable), so staff need a
+     * short-lived signed URL to actually download a resume — this is
+     * the standard pattern for private S3-compatible buckets.
+     */
+    public function resumeUrl(Request $request, string $id)
+    {
+        $user = $request->user();
+        $connection = $user->getConnectionName();
+        $candidate = Candidate::on($connection)->find($id);
+
+        if (!$candidate) {
+            return response()->json(['message' => 'Candidate not found.'], 404);
+        }
+
+        if (!$user->can('view', $candidate)) {
+            return response()->json(['message' => 'You do not have permission to view this candidate.'], 403);
+        }
+
+        if (!$candidate->resume_path) {
+            return response()->json(['message' => 'This candidate has no resume on file.'], 404);
+        }
+
+        $url = \Illuminate\Support\Facades\Storage::disk($candidate->resume_disk)
+            ->temporaryUrl($candidate->resume_path, now()->addMinutes(10));
+
+        return response()->json(['url' => $url, 'filename' => $candidate->resume_original_name]);
     }
 
     public function addNote(CreateNoteRequest $request, string $id)

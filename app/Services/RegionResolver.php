@@ -44,6 +44,20 @@ class RegionResolver
     }
 
     /**
+     * Reverse of connectionFor() — needed wherever code only has the
+     * active DB connection name (e.g. $user->getConnectionName()) but
+     * needs the region code itself (e.g. to pick a storage disk).
+     */
+    public static function regionForConnection(string $connection): string
+    {
+        return match ($connection) {
+            'pgsql_eu' => 'eu',
+            'pgsql_uk' => 'uk',
+            default => 'us',
+        };
+    }
+
+    /**
      * Region code -> Laravel filesystem disk name (config/filesystems.php).
      * Storage is a 2-way split (client-confirmed): R2 has no dedicated UK
      * jurisdiction, so UK files share the EU bucket. The DATABASE stays

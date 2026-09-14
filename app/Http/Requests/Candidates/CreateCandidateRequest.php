@@ -22,6 +22,7 @@ class CreateCandidateRequest extends FormRequest
             'current_title' => ['nullable', 'string', 'max:255'],
             'current_company' => ['nullable', 'string', 'max:255'],
             'linkedin_url' => ['nullable', 'url', 'max:255'],
+            'resume' => ['nullable', 'file', 'mimes:pdf,doc,docx', 'max:10240'], // 10MB
         ];
     }
 }

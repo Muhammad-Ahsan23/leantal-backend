@@ -9,11 +9,14 @@ use App\Models\ApplicationQuestion;
 use App\Models\Candidate;
 use App\Models\Job;
 use App\Models\PipelineStage;
+use Illuminate\Http\UploadedFile;
 use Illuminate\Support\Facades\DB;
 use Illuminate\Support\Str;
 
 class PublicApplicationService
 {
+    public function __construct(protected ResumeStorageService $resumeStorage) {}
+
     /**
      * Checks every REQUIRED question has a submitted answer. Returns a
      * Laravel-style errors array (empty if valid) — the PRD's per-job
@@ -41,11 +44,12 @@ class PublicApplicationService
      *
      * @throws DuplicateApplicationException
      */
-    public function submit(Job $job, array $data, string $connection): array
+    public function submit(Job $job, array $data, string $connection, ?UploadedFile $resume = null): array
     {
         $normalizedEmail = strtolower(trim($data['email']));
+        $resumeMeta = $this->resumeStorage->store($resume, RegionResolver::regionForConnection($connection));
 
-        return DB::connection($connection)->transaction(function () use ($job, $data, $connection, $normalizedEmail) {
+        return DB::connection($connection)->transaction(function () use ($job, $data, $connection, $normalizedEmail, $resumeMeta) {
             $candidate = Candidate::on($connection)
                 ->where('company_id', $job->company_id)
                 ->where('normalized_email', $normalizedEmail)
@@ -65,7 +69,10 @@ class PublicApplicationService
                     // there's no actor here to default to.
                     'assigned_user_id' => null,
                     'status' => 'active',
+                    ...($resumeMeta ?? []),
                 ]);
+            } elseif ($resumeMeta) {
+                $candidate->update($resumeMeta);
             }
 
             $alreadyApplied = Application::on($connection)
