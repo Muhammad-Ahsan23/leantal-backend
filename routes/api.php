@@ -1,12 +1,22 @@
 <?php
 
+use App\Http\Controllers\Api\AccountController;
+use App\Http\Controllers\Api\ActivityController;
 use App\Http\Controllers\Api\ApplicationController;
 use App\Http\Controllers\Api\ApplicationQuestionController;
 use App\Http\Controllers\Api\Auth\LoginController;
 use App\Http\Controllers\Api\Auth\PasswordResetController;
 use App\Http\Controllers\Api\Auth\SignupController;
 use App\Http\Controllers\Api\CandidateController;
+use App\Http\Controllers\Api\CompanyController;
+use App\Http\Controllers\Api\CustomFieldController;
+use App\Http\Controllers\Api\DepartmentController;
+use App\Http\Controllers\Api\EmailController;
+use App\Http\Controllers\Api\EmailTemplateController;
+use App\Http\Controllers\Api\InterviewController;
 use App\Http\Controllers\Api\JobController;
+use App\Http\Controllers\Api\NotificationPreferenceController;
+use App\Http\Controllers\Api\OAuthConnectionController;
 use App\Http\Controllers\Api\PermissionsController;
 use App\Http\Controllers\Api\PipelineStageController;
 use App\Http\Controllers\Api\Public\PublicCareersController;
@@ -79,6 +89,50 @@ Route::middleware('auth:sanctum')->group(function () {
     Route::get('/tasks/{id}', [TaskController::class, 'show']);
     Route::patch('/tasks/{id}/status', [TaskController::class, 'updateStatus']);
     Route::delete('/tasks/{id}', [TaskController::class, 'destroy']);
+
+    Route::get('/interviews', [InterviewController::class, 'index']);
+    Route::post('/interviews', [InterviewController::class, 'store']);
+    Route::get('/interviews/{id}', [InterviewController::class, 'show']);
+    Route::patch('/interviews/{id}', [InterviewController::class, 'update']);
+    Route::delete('/interviews/{id}', [InterviewController::class, 'destroy']);
+
+    Route::get('/oauth/connections', [OAuthConnectionController::class, 'index']);
+    Route::delete('/oauth/connections/{provider}', [OAuthConnectionController::class, 'disconnect']);
+
+    Route::get('/email-templates', [EmailTemplateController::class, 'index']);
+    Route::post('/email-templates', [EmailTemplateController::class, 'store']);
+    Route::get('/email-templates/{id}', [EmailTemplateController::class, 'show']);
+    Route::patch('/email-templates/{id}', [EmailTemplateController::class, 'update']);
+    Route::delete('/email-templates/{id}', [EmailTemplateController::class, 'destroy']);
+
+    Route::get('/candidates/{candidateId}/emails', [EmailController::class, 'index']);
+    Route::post('/candidates/{candidateId}/emails', [EmailController::class, 'store']);
+
+    Route::get('/company', [CompanyController::class, 'show']);
+    Route::patch('/company', [CompanyController::class, 'update']);
+    Route::post('/company/transfer-ownership', [CompanyController::class, 'transferOwnership']);
+    Route::post('/company/delete', [CompanyController::class, 'delete']);
+
+    Route::get('/departments', [DepartmentController::class, 'index']);
+    Route::post('/departments', [DepartmentController::class, 'store']);
+    Route::patch('/departments/{id}', [DepartmentController::class, 'update']);
+    Route::delete('/departments/{id}', [DepartmentController::class, 'destroy']);
+
+    Route::get('/activity', [ActivityController::class, 'index']);
+
+    Route::get('/me', [AccountController::class, 'show']);
+    Route::patch('/me', [AccountController::class, 'update']);
+    Route::post('/me/change-password', [AccountController::class, 'changePassword']);
+
+    Route::get('/notification-preferences', [NotificationPreferenceController::class, 'index']);
+    Route::patch('/notification-preferences', [NotificationPreferenceController::class, 'update']);
+
+    Route::get('/custom-fields', [CustomFieldController::class, 'index']);
+    Route::post('/custom-fields', [CustomFieldController::class, 'store']);
+    Route::patch('/custom-fields/{id}', [CustomFieldController::class, 'update']);
+    Route::delete('/custom-fields/{id}', [CustomFieldController::class, 'destroy']);
+    Route::post('/custom-fields/values', [CustomFieldController::class, 'setValues']);
+    Route::get('/custom-fields/values/{entityType}/{entityId}', [CustomFieldController::class, 'getValues']);
 });
 
 // Public — no access token needed, the refresh token itself is the credential

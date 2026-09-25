@@ -94,9 +94,13 @@ class JobService
         if ($newStatus === 'published') {
             $company = Company::on($connection)->find($job->company_id);
             // Re-publishing (e.g. from Paused) doesn't create a NEW job,
-            // so only re-check the limit when coming from Draft.
+            // so only re-check the limit when coming from Draft. The
+            // job itself is EXCLUDED from the count it's being checked
+            // against — it already exists (as 'draft'), so without this
+            // exclusion it would count against its own limit and block
+            // itself from ever publishing (bug found & fixed).
             if ($job->status === 'draft') {
-                $this->assertJobLimitNotReached($company, $connection);
+                $this->assertJobLimitNotReached($company, $connection, $job->id);
             }
         }
 
@@ -174,18 +178,27 @@ class JobService
         return $job->fresh();
     }
 
-    protected function assertJobLimitNotReached(Company $company, string $connection): void
+    protected function assertJobLimitNotReached(Company $company, string $connection, ?string $excludeJobId = null): void
     {
         $limit = $company->jobLimit();
         if ($limit === null) {
             return;
         }
 
-        // "Active" per Section 91 = anything except archived/closed
-        $activeCount = Job::on($connection)
+        // "Active" per Section 91 = anything except archived/closed.
+        // $excludeJobId matters for transitionStatus() — the job being
+        // moved TO published already exists (as 'draft'), so without
+        // excluding it, it counts against its OWN limit check and blocks
+        // itself from ever publishing when the count is already at cap.
+        $query = Job::on($connection)
             ->where('company_id', $company->id)
-            ->whereIn('status', ['draft', 'published', 'paused'])
-            ->count();
+            ->whereIn('status', ['draft', 'published', 'paused']);
+
+        if ($excludeJobId) {
+            $query->where('id', '!=', $excludeJobId);
+        }
+
+        $activeCount = $query->count();
 
         if ($activeCount >= $limit) {
             throw new \RuntimeException(
