@@ -65,4 +65,18 @@ class RegionRoutingRepository
 
         return ['region' => $row->region, 'company_id' => $row->company_id];
     }
+
+    /**
+     * Billing webhooks (Creem) only carry company_id in their metadata
+     * (set at checkout-creation time) — never a slug or email — so this
+     * lookup exists on top of the slug/email ones above.
+     */
+    public function findRegionByCompanyId(string $companyId): ?string
+    {
+        $row = DB::connection('routing_db')->table('company_region_lookup')
+            ->where('company_id', $companyId)
+            ->first();
+
+        return $row?->region;
+    }
 }

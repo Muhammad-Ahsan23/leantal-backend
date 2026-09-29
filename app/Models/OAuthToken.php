@@ -9,6 +9,20 @@ class OAuthToken extends Model
 {
     use HasUuids;
 
+    /**
+     * Explicit table name required — Laravel's automatic class-name ->
+     * table-name conversion mangles "OAuthToken" into "o_auth_tokens"
+     * (it inserts an underscore between "O" and "Auth" because of the
+     * consecutive capital letters), not our actual "oauth_tokens" table.
+     */
+    protected $table = 'oauth_tokens';
+
+    // oauth_tokens has NEITHER created_at nor updated_at — it tracks
+    // connected_at/expires_at/disconnected_at instead (set explicitly
+    // by OAuthConnectController), so Eloquent's automatic timestamp
+    // columns must be disabled entirely, not just one of them.
+    public $timestamps = false;
+
     protected $fillable = [
         'user_id', 'provider', 'access_token', 'refresh_token',
         'scope', 'connected_at', 'expires_at', 'disconnected_at',

@@ -4,7 +4,7 @@
         "Read more about it at https://getcomposer.org/doc/01-basic-usage.md#installing-dependencies",
         "This file is @generated automatically"
     ],
-    "content-hash": "4a42996efdcd062494af3fb008fc41e7",
+    "content-hash": "2ec1bdc03131424ef9d4c34552076eec",
     "packages": [
         {
             "name": "aws/aws-crt-php",
@@ -3661,6 +3661,78 @@
                 "source": "https://github.com/ramsey/uuid/tree/4.9.3"
             },
             "time": "2026-06-18T03:57:49+00:00"
+        },
+        {
+            "name": "romansh/laravel-creem",
+            "version": "v1.2.13",
+            "source": {
+                "type": "git",
+                "url": "https://github.com/romansh/laravel-creem.git",
+                "reference": "122e8a6716747f07aa77553216a41b5f445c1110"
+            },
+            "dist": {
+                "type": "zip",
+                "url": "https://api.github.com/repos/romansh/laravel-creem/zipball/122e8a6716747f07aa77553216a41b5f445c1110",
+                "reference": "122e8a6716747f07aa77553216a41b5f445c1110",
+                "shasum": ""
+            },
+            "require": {
+                "illuminate/http": "^10.0|^11.0|^12.0|^13.0",
+                "illuminate/routing": "^10.0|^11.0|^12.0|^13.0",
+                "illuminate/support": "^10.0|^11.0|^12.0|^13.0",
+                "php": "^8.1|^8.2|^8.3|^8.4"
+            },
+            "require-dev": {
+                "laravel/pint": "^1.0",
+                "orchestra/testbench": "^8.0|^9.0|^10.0|^11.0",
+                "phpcompatibility/php-compatibility": "^9.3",
+                "phpunit/phpunit": "^10.0|^11.0",
+                "squizlabs/php_codesniffer": "^3.13"
+            },
+            "type": "library",
+            "extra": {
+                "laravel": {
+                    "aliases": {
+                        "Creem": "Romansh\\LaravelCreem\\Facades\\Creem"
+                    },
+                    "providers": [
+                        "Romansh\\LaravelCreem\\CreemServiceProvider"
+                    ]
+                }
+            },
+            "autoload": {
+                "psr-4": {
+                    "Romansh\\LaravelCreem\\": "src/"
+                }
+            },
+            "notification-url": "https://packagist.org/downloads/",
+            "license": [
+                "MIT"
+            ],
+            "authors": [
+                {
+                    "name": "Roman Shalabanov",
+                    "email": "shalabanov@gmail.com"
+                }
+            ],
+            "description": "A Laravel package for Creem.io payment provider with support for products, checkouts, subscriptions, transactions, licenses, and discount codes",
+            "keywords": [
+                "billing",
+                "checkout",
+                "creem",
+                "discount-codes",
+                "laravel",
+                "license-management",
+                "payment",
+                "payments",
+                "saas",
+                "subscription"
+            ],
+            "support": {
+                "issues": "https://github.com/romansh/laravel-creem/issues",
+                "source": "https://github.com/romansh/laravel-creem/tree/v1.2.13"
+            },
+            "time": "2026-08-21T13:21:35+00:00"
         },
         {
             "name": "symfony/clock",

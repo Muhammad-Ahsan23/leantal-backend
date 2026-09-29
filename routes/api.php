@@ -7,8 +7,10 @@ use App\Http\Controllers\Api\ApplicationQuestionController;
 use App\Http\Controllers\Api\Auth\LoginController;
 use App\Http\Controllers\Api\Auth\PasswordResetController;
 use App\Http\Controllers\Api\Auth\SignupController;
+use App\Http\Controllers\Api\BillingController;
 use App\Http\Controllers\Api\CandidateController;
 use App\Http\Controllers\Api\CompanyController;
+use App\Http\Controllers\Api\CreemWebhookController;
 use App\Http\Controllers\Api\CustomFieldController;
 use App\Http\Controllers\Api\DepartmentController;
 use App\Http\Controllers\Api\EmailController;
@@ -16,6 +18,7 @@ use App\Http\Controllers\Api\EmailTemplateController;
 use App\Http\Controllers\Api\InterviewController;
 use App\Http\Controllers\Api\JobController;
 use App\Http\Controllers\Api\NotificationPreferenceController;
+use App\Http\Controllers\Api\OAuthConnectController;
 use App\Http\Controllers\Api\OAuthConnectionController;
 use App\Http\Controllers\Api\PermissionsController;
 use App\Http\Controllers\Api\PipelineStageController;
@@ -34,6 +37,15 @@ Route::post('/reset-password', [PasswordResetController::class, 'reset']);
 
 // Public — the invitation token itself is the credential, no login needed
 Route::post('/accept-invite', [UserController::class, 'acceptInvite']);
+
+// Public — Creem calls this directly; authenticated via HMAC signature
+// instead of a Bearer token (see CreemWebhookController).
+Route::post('/webhooks/creem', [CreemWebhookController::class, 'handle']);
+
+// Public — Google redirects the browser here directly after consent;
+// no Bearer token reaches this route, identity comes from 'state'
+// (see OAuthConnectController).
+Route::get('/oauth/google/callback', [OAuthConnectController::class, 'googleCallback']);
 
 // Public — candidate-facing careers page, completely unauthenticated
 Route::get('/public/careers/{companySlug}', [PublicCareersController::class, 'index']);
@@ -98,6 +110,7 @@ Route::middleware('auth:sanctum')->group(function () {
 
     Route::get('/oauth/connections', [OAuthConnectionController::class, 'index']);
     Route::delete('/oauth/connections/{provider}', [OAuthConnectionController::class, 'disconnect']);
+    Route::get('/oauth/google/connect', [OAuthConnectController::class, 'connectGoogle']);
 
     Route::get('/email-templates', [EmailTemplateController::class, 'index']);
     Route::post('/email-templates', [EmailTemplateController::class, 'store']);
@@ -112,6 +125,10 @@ Route::middleware('auth:sanctum')->group(function () {
     Route::patch('/company', [CompanyController::class, 'update']);
     Route::post('/company/transfer-ownership', [CompanyController::class, 'transferOwnership']);
     Route::post('/company/delete', [CompanyController::class, 'delete']);
+
+    Route::get('/billing/plans', [BillingController::class, 'plans']);
+    Route::post('/billing/checkout', [BillingController::class, 'checkout']);
+    Route::post('/billing/portal', [BillingController::class, 'portal']);
 
     Route::get('/departments', [DepartmentController::class, 'index']);
     Route::post('/departments', [DepartmentController::class, 'store']);

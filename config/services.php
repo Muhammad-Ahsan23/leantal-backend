@@ -35,4 +35,25 @@ return [
         ],
     ],
 
+    'frontend_url' => env('FRONTEND_URL'),
+
+    'creem' => [
+        'api_key' => env('CREEM_API_KEY'),
+        'webhook_secret' => env('CREEM_WEBHOOK_SECRET'),
+        'products' => [
+            'starter_monthly' => env('CREEM_PRODUCT_STARTER_MONTHLY'),
+            'starter_yearly' => env('CREEM_PRODUCT_STARTER_YEARLY'),
+            'team_monthly' => env('CREEM_PRODUCT_TEAM_MONTHLY'),
+            'team_yearly' => env('CREEM_PRODUCT_TEAM_YEARLY'),
+            'scale_monthly' => env('CREEM_PRODUCT_SCALE_MONTHLY'),
+            'scale_yearly' => env('CREEM_PRODUCT_SCALE_YEARLY'),
+        ],
+    ],
+
+    'google_calendar' => [
+        'client_id' => env('GOOGLE_CALENDAR_CLIENT_ID'),
+        'client_secret' => env('GOOGLE_CALENDAR_CLIENT_SECRET'),
+        'redirect_uri' => env('GOOGLE_CALENDAR_REDIRECT_URI'),
+    ],
+
 ];
