@@ -13,6 +13,18 @@ class GoogleCalendarOAuthService
      * through the SAME app, but each person connects their OWN Google
      * account. state links the callback back to which user/connection
      * initiated it (see OAuthConnectController).
+     *
+     * PRD Section 54 — "Request minimal required scopes." One "Connect
+     * Google" action requests all 4 scopes together (Calendar, Gmail
+     * send, Gmail read, and the connected account's own email address)
+     * in a single consent screen — simpler than separate "Connect
+     * Calendar" / "Connect Gmail" buttons. gmail.readonly is required
+     * (not just gmail.send) because BOTH the reply-sync watch
+     * registration (Gmail API's users.watch requires readonly/modify/
+     * metadata/mail.google.com — send-only is rejected, confirmed via
+     * a real 403 ACCESS_TOKEN_SCOPE_INSUFFICIENT error) AND reading
+     * full message bodies (users.messages.get) need read access —
+     * gmail.metadata alone would cover watch() but not body content.
      */
     public function buildAuthUrl(string $state): string
     {
@@ -20,7 +32,7 @@ class GoogleCalendarOAuthService
             'client_id' => config('services.google_calendar.client_id'),
             'redirect_uri' => config('services.google_calendar.redirect_uri'),
             'response_type' => 'code',
-            'scope' => 'https://www.googleapis.com/auth/calendar.events',
+            'scope' => 'https://www.googleapis.com/auth/calendar.events https://www.googleapis.com/auth/gmail.send https://www.googleapis.com/auth/gmail.readonly https://www.googleapis.com/auth/userinfo.email',
             'access_type' => 'offline', // required to receive a refresh_token
             'prompt' => 'consent',      // forces refresh_token on every connect, not just the first
             'state' => $state,
@@ -67,5 +79,23 @@ class GoogleCalendarOAuthService
         }
 
         return $response->json();
+    }
+
+    /**
+     * The connected Gmail address itself — needed to match incoming
+     * Pub/Sub push notifications (which identify the mailbox by email
+     * address, see GmailSyncService) back to our internal user_id.
+     *
+     * @throws \RuntimeException on failure
+     */
+    public function getUserEmail(string $accessToken): string
+    {
+        $response = Http::withToken($accessToken)->get('https://www.googleapis.com/oauth2/v2/userinfo');
+
+        if (!$response->successful()) {
+            throw new \RuntimeException('Failed to fetch connected Google account email: '.$response->body());
+        }
+
+        return $response->json('email');
     }
 }

@@ -15,6 +15,8 @@ use App\Http\Controllers\Api\CustomFieldController;
 use App\Http\Controllers\Api\DepartmentController;
 use App\Http\Controllers\Api\EmailController;
 use App\Http\Controllers\Api\EmailTemplateController;
+use App\Http\Controllers\Api\GmailPushWebhookController;
+use App\Http\Controllers\Api\MicrosoftGraphWebhookController;
 use App\Http\Controllers\Api\InterviewController;
 use App\Http\Controllers\Api\JobController;
 use App\Http\Controllers\Api\NotificationPreferenceController;
@@ -42,10 +44,24 @@ Route::post('/accept-invite', [UserController::class, 'acceptInvite']);
 // instead of a Bearer token (see CreemWebhookController).
 Route::post('/webhooks/creem', [CreemWebhookController::class, 'handle']);
 
+// Public — Google Cloud Pub/Sub calls this to notify of Gmail changes;
+// authenticated via a shared-secret query token instead of a Bearer
+// token (see GmailPushWebhookController).
+Route::post('/webhooks/gmail', [GmailPushWebhookController::class, 'handle']);
+
+// Public — Microsoft Graph calls this directly (also handles the
+// validation-token handshake on subscription creation); clientState
+// used for authentication instead of a Bearer token or query secret.
+Route::post('/webhooks/microsoft', [MicrosoftGraphWebhookController::class, 'handle']);
+Route::get('/webhooks/microsoft', [MicrosoftGraphWebhookController::class, 'handle']);
+
 // Public — Google redirects the browser here directly after consent;
 // no Bearer token reaches this route, identity comes from 'state'
 // (see OAuthConnectController).
 Route::get('/oauth/google/callback', [OAuthConnectController::class, 'googleCallback']);
+
+// Public — Microsoft redirects the browser here directly after consent.
+Route::get('/oauth/microsoft/callback', [OAuthConnectController::class, 'microsoftCallback']);
 
 // Public — candidate-facing careers page, completely unauthenticated
 Route::get('/public/careers/{companySlug}', [PublicCareersController::class, 'index']);
@@ -111,6 +127,7 @@ Route::middleware('auth:sanctum')->group(function () {
     Route::get('/oauth/connections', [OAuthConnectionController::class, 'index']);
     Route::delete('/oauth/connections/{provider}', [OAuthConnectionController::class, 'disconnect']);
     Route::get('/oauth/google/connect', [OAuthConnectController::class, 'connectGoogle']);
+    Route::get('/oauth/microsoft/connect', [OAuthConnectController::class, 'connectMicrosoft']);
 
     Route::get('/email-templates', [EmailTemplateController::class, 'index']);
     Route::post('/email-templates', [EmailTemplateController::class, 'store']);

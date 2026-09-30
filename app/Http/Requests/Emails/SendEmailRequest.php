@@ -14,14 +14,23 @@ class SendEmailRequest extends FormRequest
     public function rules(): array
     {
         return [
-            // 'send' = actually send via our SMTP now (needs subject+body
-            // OR template_id+variables). 'log' = just record an email the
-            // staff member already sent from their own Gmail/Outlook.
-            'mode' => ['required', 'in:send,log'],
+            // PRD Section 55 — 'send_personal' sends via the ACTING
+            // user's own connected Gmail (requires Google connected,
+            // "no shared inboxes"). 'send_system' sends via our system
+            // SMTP as noreply@leantal.com — intended for rejections,
+            // per PRD's explicit carve-out, though not hard-restricted
+            // to only that use since the controller can't robotically
+            // detect "this is a rejection". 'log' just records an
+            // email sent through some other means (e.g. Outlook, not
+            // yet wired for real sending).
+            'mode' => ['required', 'in:send_personal,send_system,log'],
             'template_id' => ['nullable', 'uuid'],
-            'variables' => ['nullable', 'array'],
             'subject' => ['nullable', 'string', 'max:255'],
             'body' => ['nullable', 'string', 'max:10000'],
+            // Optional context for template variable-filling
+            // ({{interview.date}}, {{meeting_link}}) — omit if not
+            // relevant to this send.
+            'interview_id' => ['nullable', 'uuid'],
             // Only meaningful for mode=log:
             'direction' => ['nullable', 'in:outbound,inbound'],
             'provider' => ['nullable', 'in:gmail,outlook'],

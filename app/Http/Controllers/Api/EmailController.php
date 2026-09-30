@@ -5,7 +5,9 @@ namespace App\Http\Controllers\Api;
 use App\Http\Controllers\Controller;
 use App\Http\Requests\Emails\SendEmailRequest;
 use App\Models\Candidate;
-use App\Models\Email;
+use App\Models\Company;
+use App\Models\Interview;
+use App\Models\Job;
 use App\Services\EmailService;
 use Illuminate\Http\Request;
 
@@ -14,9 +16,11 @@ class EmailController extends Controller
     public function __construct(protected EmailService $emails) {}
 
     /**
-     * PRD Section 53 — the candidate's email thread. Same access rule as
-     * Notes/Activity: if you can view this candidate, you can see the
-     * emails tied to them.
+     * PRD Section 57 — thread listing. Privacy filtering (system
+     * emails visible to all candidate-viewers, personal-inbox emails
+     * visible only to their sender) happens inside
+     * EmailService::listForCandidate() — see its docblock for the
+     * PRD citations behind that split.
      */
     public function index(Request $request, string $candidateId)
     {
@@ -32,21 +36,20 @@ class EmailController extends Controller
             return response()->json(['message' => 'You do not have permission to view this candidate.'], 403);
         }
 
-        $emails = Email::on($connection)->where('candidate_id', $candidateId)
-            ->with('user:id,name')
-            ->orderBy('sent_at')
-            ->get();
+        $emails = $this->emails->listForCandidate($candidateId, $user, $connection);
 
         return response()->json(['emails' => $emails]);
     }
 
     /**
-     * PRD Section 55-58 — two modes:
-     * - mode=send: actually sends via our own SMTP right now (template
-     *   or free text) — this is what powers rejection emails.
-     * - mode=log: just records an email the staff member already sent
-     *   from their own connected inbox (manual bookkeeping until live
-     *   Gmail/Outlook sync is wired).
+     * PRD Section 55 — three modes:
+     * - mode=send_personal: sends via the ACTING user's own connected
+     *   Gmail. Requires Google connected — "strictly personal", no
+     *   shared inboxes.
+     * - mode=send_system: sends via our SMTP as noreply@leantal.com —
+     *   powers rejection emails.
+     * - mode=log: records an email sent through some other means
+     *   (Outlook — not yet wired for real sending).
      *
      * Same permission as adding a note (CandidatePolicy::update).
      */
@@ -65,21 +68,45 @@ class EmailController extends Controller
         }
 
         $data = $request->validated();
+        $company = Company::on($connection)->find($user->company_id);
+        $job = null;
+        $interview = null;
+
+        // Job context comes from the candidate's application by
+        // default — most rejection/communication emails need
+        // {{job.title}} even when NO interview has been scheduled at
+        // all. interview_id (below) can still override this when the
+        // email is specifically about a particular interview.
+        $application = \App\Models\Application::on($connection)
+            ->where('candidate_id', $candidateId)
+            ->latest('created_at')
+            ->first();
+        if ($application) {
+            $job = Job::on($connection)->find($application->job_id);
+        }
+
+        // Best-effort context for template variables ({{interview.date}},
+        // {{meeting_link}}) — only overrides $job if this specific
+        // interview points to a different one than the latest application.
+        if ($data['interview_id'] ?? null) {
+            $interview = Interview::on($connection)->where('candidate_id', $candidateId)->find($data['interview_id']);
+            if ($interview) {
+                $job = Job::on($connection)->find($interview->job_id);
+            }
+        }
 
         try {
-            if ($data['mode'] === 'send') {
-                $email = $this->emails->sendSystemEmail(
-                    $candidate,
-                    $data['template_id'] ?? null,
-                    $data['subject'] ?? null,
-                    $data['body'] ?? null,
-                    $data['variables'] ?? [],
-                    $user,
-                    $connection
-                );
-            } else {
-                $email = $this->emails->logManualEmail($candidate, $user, $data, $connection);
-            }
+            $email = match ($data['mode']) {
+                'send_personal' => $this->emails->sendPersonalEmail(
+                    $candidate, $user, $data['template_id'] ?? null, $data['subject'] ?? null, $data['body'] ?? null,
+                    $job, $interview, $company->name, $connection
+                ),
+                'send_system' => $this->emails->sendSystemEmail(
+                    $candidate, $data['template_id'] ?? null, $data['subject'] ?? null, $data['body'] ?? null,
+                    $job, $user, $interview, $company->name, $user, $connection
+                ),
+                'log' => $this->emails->logManualEmail($candidate, $user, $data, $connection),
+            };
         } catch (\RuntimeException $e) {
             return response()->json(['message' => $e->getMessage()], 422);
         }

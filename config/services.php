@@ -50,10 +50,21 @@ return [
         ],
     ],
 
+    // pubsub_topic + pubsub_webhook_secret are NEW — for Gmail's
+    // reply-receiving sync (GmailWatchService, GmailPushWebhookController).
     'google_calendar' => [
         'client_id' => env('GOOGLE_CALENDAR_CLIENT_ID'),
         'client_secret' => env('GOOGLE_CALENDAR_CLIENT_SECRET'),
         'redirect_uri' => env('GOOGLE_CALENDAR_REDIRECT_URI'),
+        'pubsub_topic' => env('GOOGLE_PUBSUB_TOPIC'),
+        'pubsub_webhook_secret' => env('GOOGLE_PUBSUB_WEBHOOK_SECRET'),
+    ],
+    'microsoft' => [
+        'client_id' => env('MICROSOFT_CLIENT_ID'),
+        'client_secret' => env('MICROSOFT_CLIENT_SECRET'),
+        'redirect_uri' => env('MICROSOFT_REDIRECT_URI'),
+        'webhook_url' => env('MICROSOFT_WEBHOOK_URL'),
+        'webhook_secret' => env('MICROSOFT_WEBHOOK_SECRET'),
     ],
 
 ];

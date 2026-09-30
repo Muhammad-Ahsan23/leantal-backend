@@ -24,7 +24,7 @@ class OAuthToken extends Model
     public $timestamps = false;
 
     protected $fillable = [
-        'user_id', 'provider', 'access_token', 'refresh_token',
+        'user_id', 'provider', 'provider_email', 'access_token', 'refresh_token',
         'scope', 'connected_at', 'expires_at', 'disconnected_at',
     ];
 

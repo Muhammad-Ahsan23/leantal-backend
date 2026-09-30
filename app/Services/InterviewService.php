@@ -13,23 +13,24 @@ use Illuminate\Support\Str;
 
 class InterviewService
 {
-    public function __construct(protected GoogleCalendarService $googleCalendar) {}
+    public function __construct(
+        protected GoogleCalendarService $googleCalendar,
+        protected MicrosoftGraphCalendarService $microsoftCalendar,
+    ) {}
 
     /**
      * PRD Section 60-61 — schedules an interview AND, when the
-     * organizer has connected Google Calendar and chose 'google_meet'
-     * as the provider, creates a real Google Calendar event with an
-     * auto-generated Meet link and emails the candidate a calendar
-     * invite (Google handles that email itself — see
-     * GoogleCalendarService::createEvent()).
+     * organizer has connected the matching provider (Google Calendar
+     * for 'google_meet', Outlook/Microsoft 365 for 'microsoft_teams'),
+     * creates a real calendar event with an auto-generated meeting
+     * link and emails the candidate a calendar invite (both providers
+     * handle that invite email themselves).
      *
      * DELIBERATE DESIGN — graceful degradation: if the organizer hasn't
-     * connected Google, or the Google API call fails for any reason
-     * (expired connection, network issue, revoked permission), the
-     * interview is still created successfully with whatever manual
-     * meeting_url was submitted — core scheduling never fails because
-     * an external API had a bad moment. The failure is logged, not
-     * silently swallowed, so it's visible for follow-up.
+     * connected the relevant provider, or the API call fails for any
+     * reason, the interview is still created successfully with
+     * whatever manual meeting_url was submitted — core scheduling
+     * never fails because an external API had a bad moment.
      */
     public function schedule(array $data, string $companyId, User $actor, string $connection): Interview
     {
@@ -38,8 +39,9 @@ class InterviewService
             'company_id' => $companyId,
         ]);
 
-        if (($data['provider'] ?? null) === 'google_meet') {
-            $this->trySyncCreate($interview, $data, $connection);
+        $provider = $data['provider'] ?? null;
+        if (in_array($provider, ['google_meet', 'microsoft_teams'], true)) {
+            $this->trySyncCreate($interview, $data, $provider, $connection);
         }
 
         $this->logActivity($connection, $companyId, $actor->id, 'interview.scheduled', $interview, [
@@ -54,7 +56,7 @@ class InterviewService
         $interview->update($data);
         $interview = $interview->fresh();
 
-        if ($interview->provider === 'google_meet' && $interview->calendar_event_id) {
+        if (in_array($interview->provider, ['google_meet', 'microsoft_teams'], true) && $interview->calendar_event_id) {
             $this->trySyncUpdate($interview, $connection);
         }
 
@@ -73,7 +75,7 @@ class InterviewService
      */
     public function cancel(Interview $interview, User $actor, string $connection): void
     {
-        if ($interview->provider === 'google_meet' && $interview->calendar_event_id) {
+        if (in_array($interview->provider, ['google_meet', 'microsoft_teams'], true) && $interview->calendar_event_id) {
             $this->trySyncDelete($interview, $connection);
         }
 
@@ -84,23 +86,42 @@ class InterviewService
         $interview->delete();
     }
 
-    protected function trySyncCreate(Interview $interview, array $data, string $connection): void
+    /**
+     * Maps an interview provider to its OAuth provider name + calendar
+     * service — one lookup point instead of if/else scattered across
+     * every sync method.
+     */
+    protected function resolveProvider(string $interviewProvider): array
     {
+        return match ($interviewProvider) {
+            'google_meet' => ['oauth_provider' => 'google', 'service' => $this->googleCalendar],
+            'microsoft_teams' => ['oauth_provider' => 'microsoft', 'service' => $this->microsoftCalendar],
+            default => ['oauth_provider' => null, 'service' => null],
+        };
+    }
+
+    protected function trySyncCreate(Interview $interview, array $data, string $provider, string $connection): void
+    {
+        ['oauth_provider' => $oauthProvider, 'service' => $service] = $this->resolveProvider($provider);
+        if (!$oauthProvider) {
+            return;
+        }
+
         $token = OAuthToken::on($connection)
             ->where('user_id', $data['organizer_id'])
-            ->where('provider', 'google')
+            ->where('provider', $oauthProvider)
             ->whereNull('disconnected_at')
             ->first();
 
         if (!$token) {
-            return; // organizer hasn't connected Google — manual meeting_url (if any) stands as-is
+            return; // organizer hasn't connected this provider — manual meeting_url (if any) stands
         }
 
         $candidate = Candidate::on($connection)->find($data['candidate_id']);
         $job = Job::on($connection)->find($data['job_id']);
 
         try {
-            $result = $this->googleCalendar->createEvent($token, [
+            $result = $service->createEvent($token, [
                 'summary' => "Interview: {$candidate?->name} — {$job?->title}",
                 'description' => $data['interview_type'] ?? null,
                 'start_time' => $interview->start_time->toIso8601String(),
@@ -113,7 +134,7 @@ class InterviewService
                 'meeting_url' => $result['meeting_url'] ?? $interview->meeting_url,
             ]);
         } catch (\RuntimeException $e) {
-            Log::warning('Google Calendar sync failed on interview create — falling back to manual meeting_url', [
+            Log::warning("{$provider} calendar sync failed on interview create — falling back to manual meeting_url", [
                 'interview_id' => $interview->id,
                 'message' => $e->getMessage(),
             ]);
@@ -122,9 +143,14 @@ class InterviewService
 
     protected function trySyncUpdate(Interview $interview, string $connection): void
     {
+        ['oauth_provider' => $oauthProvider, 'service' => $service] = $this->resolveProvider($interview->provider);
+        if (!$oauthProvider) {
+            return;
+        }
+
         $token = OAuthToken::on($connection)
             ->where('user_id', $interview->organizer_id)
-            ->where('provider', 'google')
+            ->where('provider', $oauthProvider)
             ->whereNull('disconnected_at')
             ->first();
 
@@ -133,12 +159,12 @@ class InterviewService
         }
 
         try {
-            $this->googleCalendar->updateEvent($token, $interview->calendar_event_id, [
+            $service->updateEvent($token, $interview->calendar_event_id, [
                 'start_time' => $interview->start_time->toIso8601String(),
                 'end_time' => $interview->end_time->toIso8601String(),
             ]);
         } catch (\RuntimeException $e) {
-            Log::warning('Google Calendar sync failed on interview reschedule', [
+            Log::warning("{$interview->provider} calendar sync failed on interview reschedule", [
                 'interview_id' => $interview->id,
                 'message' => $e->getMessage(),
             ]);
@@ -147,9 +173,14 @@ class InterviewService
 
     protected function trySyncDelete(Interview $interview, string $connection): void
     {
+        ['oauth_provider' => $oauthProvider, 'service' => $service] = $this->resolveProvider($interview->provider);
+        if (!$oauthProvider) {
+            return;
+        }
+
         $token = OAuthToken::on($connection)
             ->where('user_id', $interview->organizer_id)
-            ->where('provider', 'google')
+            ->where('provider', $oauthProvider)
             ->whereNull('disconnected_at')
             ->first();
 
@@ -158,9 +189,9 @@ class InterviewService
         }
 
         try {
-            $this->googleCalendar->deleteEvent($token, $interview->calendar_event_id);
+            $service->deleteEvent($token, $interview->calendar_event_id);
         } catch (\RuntimeException $e) {
-            Log::warning('Google Calendar sync failed on interview cancel', [
+            Log::warning("{$interview->provider} calendar sync failed on interview cancel", [
                 'interview_id' => $interview->id,
                 'message' => $e->getMessage(),
             ]);
