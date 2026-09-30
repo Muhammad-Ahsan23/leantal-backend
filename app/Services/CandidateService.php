@@ -15,7 +15,10 @@ use Illuminate\Support\Str;
 
 class CandidateService
 {
-    public function __construct(protected ResumeStorageService $resumeStorage) {}
+    public function __construct(
+        protected ResumeStorageService $resumeStorage,
+        protected NotificationService $notifications,
+    ) {}
 
     /**
      * PRD Section 41 — manually add a candidate to a job. Section 133 —
@@ -155,6 +158,9 @@ class CandidateService
         $this->forgetCandidatesCache($candidate->company_id);
     }
 
+    /**
+     * PRD Section 20 — "Candidate assigned to you" notification trigger.
+     */
     public function assign(Candidate $candidate, string $newAssignedUserId, User $actor, string $connection): Candidate
     {
         $candidate->update(['assigned_user_id' => $newAssignedUserId]);
@@ -165,6 +171,11 @@ class CandidateService
         ]);
 
         $this->forgetCandidatesCache($candidate->company_id);
+
+        $assignedUser = User::on($connection)->find($newAssignedUserId);
+        if ($assignedUser) {
+            $this->notifications->notify($assignedUser, 'candidate_assigned', "You were assigned candidate: {$candidate->name}", $connection, "/candidates/{$candidate->id}");
+        }
 
         return $candidate->fresh();
     }

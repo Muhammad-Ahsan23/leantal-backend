@@ -7,6 +7,7 @@ use App\Models\Interview;
 use App\Models\Job;
 use App\Models\OAuthToken;
 use App\Models\User;
+use App\Services\NotificationService;
 use Illuminate\Support\Facades\DB;
 use Illuminate\Support\Facades\Log;
 use Illuminate\Support\Str;
@@ -16,6 +17,7 @@ class InterviewService
     public function __construct(
         protected GoogleCalendarService $googleCalendar,
         protected MicrosoftGraphCalendarService $microsoftCalendar,
+        protected NotificationService $notifications,
     ) {}
 
     /**
@@ -48,6 +50,12 @@ class InterviewService
             'start_time' => $interview->start_time->toIso8601String(),
         ]);
 
+        // PRD Section 20 — "Interview scheduled/changed."
+        $organizer = User::on($connection)->find($data['organizer_id']);
+        if ($organizer) {
+            $this->notifications->notify($organizer, 'interview_scheduled', 'An interview was scheduled on your calendar.', $connection, "/calendar?interview={$interview->id}");
+        }
+
         return $interview->fresh();
     }
 
@@ -63,6 +71,12 @@ class InterviewService
         $this->logActivity($connection, $interview->company_id, $actor->id, 'interview.rescheduled', $interview, [
             'start_time' => $interview->start_time->toIso8601String(),
         ]);
+
+        // PRD Section 20 — "Interview scheduled/changed."
+        $organizer = User::on($connection)->find($interview->organizer_id);
+        if ($organizer) {
+            $this->notifications->notify($organizer, 'interview_scheduled', 'One of your interviews was rescheduled.', $connection, "/calendar?interview={$interview->id}");
+        }
 
         return $interview->fresh();
     }

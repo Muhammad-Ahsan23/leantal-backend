@@ -9,9 +9,12 @@ use Illuminate\Support\Str;
 
 class TaskService
 {
+    public function __construct(protected NotificationService $notifications) {}
+
     /**
      * PRD Section 62-63 — Owner/HM create tasks (enforced via
      * TaskPolicy::create() in the controller before this runs).
+     * PRD Section 20 — "Task assigned to you" notification trigger.
      */
     public function create(array $data, User $creator, string $companyId, string $connection): Task
     {
@@ -27,6 +30,11 @@ class TaskService
             'title' => $task->title,
             'assigned_to' => $task->assigned_user_id,
         ]);
+
+        $assignedUser = User::on($connection)->find($task->assigned_user_id);
+        if ($assignedUser) {
+            $this->notifications->notify($assignedUser, 'task_assigned', "You were assigned a task: {$task->title}", $connection, "/tasks/{$task->id}");
+        }
 
         return $task;
     }

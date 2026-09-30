@@ -5,11 +5,14 @@ namespace App\Http\Controllers\Api;
 use App\Http\Controllers\Controller;
 use App\Http\Requests\Account\ChangePasswordRequest;
 use App\Http\Requests\Account\UpdateProfileRequest;
+use App\Services\NotificationService;
 use Illuminate\Http\Request;
 use Illuminate\Support\Facades\Hash;
 
 class AccountController extends Controller
 {
+    public function __construct(protected NotificationService $notifications) {}
+
     /**
      * PRD Section 114 — "Users manage personal name, password, MFA,
      * notification preferences, connected mailboxes, and calendar
@@ -58,6 +61,10 @@ class AccountController extends Controller
         // own current session.
         $currentTokenId = $user->currentAccessToken()?->id;
         $user->tokens()->when($currentTokenId, fn ($q) => $q->where('id', '!=', $currentTokenId))->delete();
+
+        // PRD Section 20 — "Important account/security event" —
+        // mandatory notification type, cannot be disabled via preferences.
+        $this->notifications->notify($user, 'password_changed', 'Your password was changed.', $user->getConnectionName());
 
         return response()->json(['message' => 'Password changed successfully.']);
     }

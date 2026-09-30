@@ -19,6 +19,7 @@ use App\Http\Controllers\Api\GmailPushWebhookController;
 use App\Http\Controllers\Api\MicrosoftGraphWebhookController;
 use App\Http\Controllers\Api\InterviewController;
 use App\Http\Controllers\Api\JobController;
+use App\Http\Controllers\Api\NotificationController;
 use App\Http\Controllers\Api\NotificationPreferenceController;
 use App\Http\Controllers\Api\OAuthConnectController;
 use App\Http\Controllers\Api\OAuthConnectionController;
@@ -160,6 +161,12 @@ Route::middleware('auth:sanctum')->group(function () {
 
     Route::get('/notification-preferences', [NotificationPreferenceController::class, 'index']);
     Route::patch('/notification-preferences', [NotificationPreferenceController::class, 'update']);
+
+    Route::get('/notifications', [NotificationController::class, 'index']);
+    Route::get('/notifications/unread-count', [NotificationController::class, 'unreadCount']);
+    Route::patch('/notifications/{id}/read', [NotificationController::class, 'markRead']);
+    Route::post('/notifications/read-all', [NotificationController::class, 'markAllRead']);
+    Route::post('/notifications/broadcast', [NotificationController::class, 'broadcast']);
 
     Route::get('/custom-fields', [CustomFieldController::class, 'index']);
     Route::post('/custom-fields', [CustomFieldController::class, 'store']);

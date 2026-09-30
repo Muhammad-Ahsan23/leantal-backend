@@ -9,6 +9,7 @@ use App\Models\Job;
 use App\Models\PipelineStage;
 use App\Models\User;
 use App\Support\CacheVersion;
+use App\Services\NotificationService;
 use Illuminate\Support\Facades\DB;
 
 class JobService
@@ -16,6 +17,7 @@ class JobService
     public function __construct(
         protected GoogleIndexingService $googleIndexing,
         protected JobStructuredDataService $structuredData,
+        protected NotificationService $notifications,
     ) {}
 
     /**
@@ -174,6 +176,13 @@ class JobService
 
         $this->forgetJobsCache($job->company_id);
         CacheVersion::bump("company:{$job->company_id}:candidates");
+
+        // PRD Section 20 — "Job assigned to you" is an explicitly
+        // listed notification trigger.
+        $assignedUser = \App\Models\User::on($connection)->find($assignedUserId);
+        if ($assignedUser) {
+            $this->notifications->notify($assignedUser, 'job_assigned', "You were assigned to job: {$job->title}", $connection, "/jobs/{$job->id}");
+        }
 
         return $job->fresh();
     }
