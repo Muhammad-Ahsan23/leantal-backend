@@ -74,6 +74,111 @@ class CreemService
     }
 
     /**
+     * Plan tier order — used to decide upgrade vs downgrade, which
+     * determines the correct proration mode.
+     */
+    protected const PLAN_TIERS = ['free' => 0, 'starter' => 1, 'team' => 2, 'scale' => 3];
+
+    /**
+     * CONFIRMED (docs.creem.io/api-reference/endpoint/upgrade-subscription)
+     * — changing an EXISTING subscriber's plan must use Creem's
+     * dedicated upgrade endpoint, never a new checkout (a new checkout
+     * would create a SECOND, duplicate subscription and double-bill
+     * the customer).
+     *
+     * Proration mode matters and is NOT symmetric:
+     * - Upgrades: 'proration-charge-immediately' — charges the price
+     *   difference now, change takes effect immediately.
+     * - Downgrades: 'proration-none' — a real-world Creem bug (400
+     *   'subscription_concurrent_change') occurs with
+     *   proration-charge-immediately when the owed refund exceeds what
+     *   can be refunded against the single most recent charge.
+     *   proration-none avoids this: the plan changes immediately, the
+     *   lower price starts at the next billing date, nothing refunded.
+     *
+     * @throws \RuntimeException on failure or an unrecognized plan
+     */
+    public function changePlan(string $subscriptionId, string $currentPlan, string $newPlan, string $interval): array
+    {
+        $productKey = "{$newPlan}_{$interval}";
+        $newProductId = config("services.creem.products.{$productKey}");
+
+        if (!$newProductId) {
+            throw new \RuntimeException("No Creem product configured for '{$productKey}'.");
+        }
+
+        $currentTier = self::PLAN_TIERS[$currentPlan] ?? 0;
+        $newTier = self::PLAN_TIERS[$newPlan] ?? 0;
+        $isUpgrade = $newTier >= $currentTier;
+
+        $response = Http::withHeaders(['x-api-key' => config('services.creem.api_key')])
+            ->post($this->apiBase()."/v1/subscriptions/{$subscriptionId}/upgrade", [
+                'product_id' => $newProductId,
+                'update_behavior' => $isUpgrade ? 'proration-charge-immediately' : 'proration-none',
+            ]);
+
+        if (!$response->successful()) {
+            throw new \RuntimeException('Creem plan change failed: '.$response->body());
+        }
+
+        return $response->json();
+    }
+
+    /**
+     * Plan tier order — used to decide upgrade vs downgrade, which
+     * determines the correct proration mode (see changePlan() docblock).
+     */
+    protected const PLAN_TIERS = ['free' => 0, 'starter' => 1, 'team' => 2, 'scale' => 3];
+
+    /**
+     * CONFIRMED (docs.creem.io/api-reference/endpoint/upgrade-subscription,
+     * fetched 2026-09-26) — changing an EXISTING subscriber's plan must
+     * use Creem's dedicated upgrade endpoint, never a new checkout (a
+     * new checkout would create a SECOND, duplicate subscription and
+     * double-bill the customer).
+     *
+     * Proration mode matters and is NOT symmetric:
+     * - Upgrades: 'proration-charge-immediately' — charges the price
+     *   difference now, change takes effect immediately.
+     * - Downgrades: 'proration-none' — MUST be used, not
+     *   'proration-charge-immediately'. A real-world, documented bug
+     *   (Creem returns 400 'subscription_concurrent_change' and refuses
+     *   the change) occurs when a downgrade's owed refund exceeds what
+     *   can be refunded against the single most recent charge — which
+     *   is common once a customer has upgraded even once before. Using
+     *   'proration-none' avoids this entirely: the plan changes
+     *   immediately, the lower price simply takes effect at the next
+     *   billing date, nothing is refunded.
+     *
+     * @throws \RuntimeException on failure or an unrecognized plan
+     */
+    public function changePlan(string $subscriptionId, string $currentPlan, string $newPlan, string $interval): array
+    {
+        $productKey = "{$newPlan}_{$interval}";
+        $newProductId = config("services.creem.products.{$productKey}");
+
+        if (!$newProductId) {
+            throw new \RuntimeException("No Creem product configured for '{$productKey}'.");
+        }
+
+        $currentTier = self::PLAN_TIERS[$currentPlan] ?? 0;
+        $newTier = self::PLAN_TIERS[$newPlan] ?? 0;
+        $isUpgrade = $newTier >= $currentTier;
+
+        $response = Http::withHeaders(['x-api-key' => config('services.creem.api_key')])
+            ->post($this->apiBase()."/v1/subscriptions/{$subscriptionId}/upgrade", [
+                'product_id' => $newProductId,
+                'update_behavior' => $isUpgrade ? 'proration-charge-immediately' : 'proration-none',
+            ]);
+
+        if (!$response->successful()) {
+            throw new \RuntimeException('Creem plan change failed: '.$response->body());
+        }
+
+        return $response->json();
+    }
+
+    /**
      * PRD Section 125 — webhooks "must be authenticated". ASSUMPTION:
      * HMAC-SHA256 over the raw request body, compared against a
      * 'creem-signature' header — this is the standard pattern most
