@@ -94,4 +94,25 @@ class MicrosoftSubscriptionService
 
         $state->update(['expires_at' => $expiresAt]);
     }
+
+    /**
+     * PRD Section 131 — "immediately terminates sync jobs." Actively
+     * removes the Graph subscription (rather than letting it sit until
+     * natural ~3-day expiry) — the moment a user disconnects, Microsoft
+     * stops sending us notifications for their mailbox.
+     *
+     * @throws \RuntimeException on failure
+     */
+    public function deleteSubscription(OAuthToken $token, string $subscriptionId): void
+    {
+        $accessToken = $this->ensureFreshToken($token);
+
+        $response = Http::withToken($accessToken)
+            ->delete("https://graph.microsoft.com/v1.0/subscriptions/{$subscriptionId}");
+
+        // 404 means Graph already expired/removed it — not a real failure.
+        if (!$response->successful() && $response->status() !== 404) {
+            throw new \RuntimeException('Microsoft subscription deletion failed: '.$response->body());
+        }
+    }
 }

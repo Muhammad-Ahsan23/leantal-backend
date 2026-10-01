@@ -84,4 +84,26 @@ class GmailWatchService
     {
         $this->registerWatch($token, $connection);
     }
+
+    /**
+     * PRD Section 131 — "immediately terminates sync jobs." Gmail's
+     * stop endpoint explicitly cancels the watch (vs letting it sit
+     * until natural 7-day expiry) — the moment a user disconnects,
+     * Google stops sending us Pub/Sub notifications for their mailbox.
+     *
+     * @throws \RuntimeException on failure
+     */
+    public function stopWatch(OAuthToken $token): void
+    {
+        $accessToken = $this->ensureFreshToken($token);
+
+        $response = Http::withToken($accessToken)
+            ->post('https://gmail.googleapis.com/gmail/v1/users/me/stop');
+
+        // Gmail returns 200 with an empty body on success; a 404/400
+        // here generally means there was nothing active to stop anyway.
+        if (!$response->successful() && !in_array($response->status(), [400, 404], true)) {
+            throw new \RuntimeException('Gmail watch stop failed: '.$response->body());
+        }
+    }
 }

@@ -98,4 +98,27 @@ class GoogleCalendarOAuthService
 
         return $response->json('email');
     }
+
+    /**
+     * PRD Section 131 — "Disconnecting Gmail/Outlook immediately
+     * terminates sync jobs, deletes stored access/refresh tokens."
+     * Revokes the token AT GOOGLE too (not just deleting our own copy)
+     * — Google's revoke endpoint accepts either an access_token or a
+     * refresh_token and invalidates the whole grant, so a single call
+     * covers both. Best-effort: if the token was already expired/
+     * invalid, Google still returns 200, so failures here are genuinely
+     * abnormal — caller decides whether to treat as fatal.
+     *
+     * @throws \RuntimeException on failure
+     */
+    public function revokeToken(string $token): void
+    {
+        $response = Http::asForm()->post('https://oauth2.googleapis.com/revoke', [
+            'token' => $token,
+        ]);
+
+        if (!$response->successful()) {
+            throw new \RuntimeException('Google token revocation failed: '.$response->body());
+        }
+    }
 }
