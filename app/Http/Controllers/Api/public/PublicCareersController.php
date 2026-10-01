@@ -11,12 +11,11 @@ use App\Services\PublicApplicationService;
 use App\Services\RegionResolver;
 use App\Services\RegionRoutingRepository;
 use Illuminate\Http\Request;
+use Illuminate\Support\Facades\DB;
 use Illuminate\Support\Facades\RateLimiter;
 
 class PublicCareersController extends Controller
 {
-    // Public-safe fields only — never leak assigned_user_id, created_by,
-    // or company_id to an unauthenticated visitor.
     protected const PUBLIC_JOB_FIELDS = [
         'id', 'title', 'department', 'description', 'location', 'location_type',
         'employment_type', 'compensation_enabled', 'compensation_type',
@@ -30,14 +29,6 @@ class PublicCareersController extends Controller
         protected \App\Services\JobStructuredDataService $structuredData,
     ) {}
 
-    /**
-     * PRD Section 44 + 92 — only PUBLISHED jobs are listed. Draft is
-     * never visible; Closed/Archived stop being listed once they leave
-     * Published (ASSUMPTION: Paused jobs are also hidden here — PRD
-     * Section 92 allows either "visible or hidden" for Paused, this
-     * picks the more conservative reading; flag for client confirmation
-     * if they want Paused jobs to stay visible-but-non-applyable instead).
-     */
     public function index(Request $request, string $companySlug)
     {
         $company = $this->resolveCompany($companySlug);
@@ -87,8 +78,6 @@ class PublicCareersController extends Controller
             return response()->json(['message' => 'Job not found or no longer accepting applications.'], 404);
         }
 
-        // Candidates need to see the questions to answer them, but never
-        // the internal knockout configuration (that's staff-only intel).
         $questions = ApplicationQuestion::on($connection)
             ->where('job_id', $jobId)
             ->orderBy('order')
@@ -100,22 +89,16 @@ class PublicCareersController extends Controller
         return response()->json([
             'job' => $job,
             'questions' => $questions,
-            // PRD Section 50 — embed this AS-IS in a
-            // <script type="application/ld+json"> tag on the job page.
             'structured_data' => $this->structuredData->build($job, $companySlug, $companyModel->name ?? ''),
-            // PRD Section 52 — social share buttons just need this URL;
-            // no backend logic needed beyond providing it. e.g.:
-            // LinkedIn: https://www.linkedin.com/sharing/share-offsite/?url={canonical_url}
-            // Twitter/X: https://twitter.com/intent/tweet?url={canonical_url}&text={job.title}
             'canonical_url' => $canonicalUrl,
         ]);
     }
 
     /**
      * PRD Section 93 (application flow) + Section 29 (knockout stays
-     * silent). Rate-limited per email+job to blunt trivial spam/abuse —
-     * not a PRD-stated requirement, just baseline hygiene for a public,
-     * unauthenticated write endpoint.
+     * silent) + Section 119 (suspended companies — "halts... job
+     * application intake"). Rate-limited per email+job to blunt trivial
+     * spam/abuse.
      */
     public function apply(SubmitApplicationRequest $request, string $companySlug, string $jobId)
     {
@@ -125,6 +108,14 @@ class PublicCareersController extends Controller
         }
 
         $connection = RegionResolver::connectionFor($company['region']);
+
+        // PRD Section 119 — checked before fetching the job: a suspended
+        // company should never accept a new application, regardless of
+        // the job's own status.
+        $suspendedAt = DB::connection($connection)->table('companies')->where('id', $company['company_id'])->value('suspended_at');
+        if ($suspendedAt) {
+            return response()->json(['message' => 'This job is no longer accepting applications.'], 404);
+        }
 
         $job = Job::on($connection)
             ->where('company_id', $company['company_id'])
@@ -155,8 +146,6 @@ class PublicCareersController extends Controller
             return response()->json(['message' => $e->getMessage()], 422);
         }
 
-        // Deliberately the SAME response whether the candidate was
-        // knockout-rejected or not — PRD Section 29: they never find out.
         return response()->json([
             'message' => "Thank you for applying! We've received your application and will be in touch if there's a match.",
         ], 201);

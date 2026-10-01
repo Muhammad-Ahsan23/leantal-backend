@@ -7,9 +7,11 @@ use App\Http\Requests\Jobs\AssignJobRequest;
 use App\Http\Requests\Jobs\CreateJobRequest;
 use App\Http\Requests\Jobs\UpdateJobRequest;
 use App\Http\Requests\Jobs\UpdateJobStatusRequest;
+use App\Models\Company;
 use App\Models\Job;
 use App\Models\User;
 use App\Services\JobService;
+use App\Services\SocialSharingService;
 use App\Support\CacheVersion;
 use Illuminate\Http\Request;
 use Illuminate\Support\Facades\Cache;
@@ -17,7 +19,10 @@ use Illuminate\Support\Facades\DB;
 
 class JobController extends Controller
 {
-    public function __construct(protected JobService $jobs) {}
+    public function __construct(
+        protected JobService $jobs,
+        protected SocialSharingService $socialSharing,
+    ) {}
 
     /**
      * PRD Section 21 — list with search + filters. Uses
@@ -181,5 +186,34 @@ class JobController extends Controller
         $job = $this->jobs->assign($job, $targetUserId, $connection);
 
         return response()->json(['job' => $job]);
+    }
+
+    /**
+     * PRD Section 52 — "After publishing a job, provide Share Job
+     * buttons: LinkedIn, X, Threads." Restricted to published jobs
+     * only — sharing a draft/unpublished job would link to a page
+     * candidates can't actually apply from.
+     */
+    public function shareLinks(Request $request, string $id)
+    {
+        $user = $request->user();
+        $connection = $user->getConnectionName();
+        $job = Job::on($connection)->find($id);
+
+        if (!$job) {
+            return response()->json(['message' => 'Job not found.'], 404);
+        }
+
+        if (!$user->can('view', $job)) {
+            return response()->json(['message' => 'You do not have permission to view this job.'], 403);
+        }
+
+        if ($job->status !== 'published') {
+            return response()->json(['message' => 'Share links are only available for published jobs.'], 422);
+        }
+
+        $company = Company::on($connection)->find($job->company_id);
+
+        return response()->json($this->socialSharing->buildShareLinks($job, $company));
     }
 }

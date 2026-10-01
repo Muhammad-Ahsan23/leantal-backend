@@ -3,6 +3,12 @@
 use App\Http\Controllers\Api\AccountController;
 use App\Http\Controllers\Api\ActivityController;
 use App\Http\Controllers\Api\ApplicationController;
+use App\Http\Controllers\Api\SuperAdmin\SuperAdminAuthController;
+use App\Http\Controllers\Api\SuperAdmin\SuperAdminDashboardController;
+use App\Http\Controllers\Api\SuperAdmin\SuperAdminCompanyController;
+use App\Http\Controllers\Api\SuperAdmin\SuperAdminAuditController;
+use App\Http\Controllers\Api\SuperAdmin\SuperAdminImpersonationController;
+use App\Http\Controllers\Api\ImpersonationController;
 use App\Http\Controllers\Api\ApplicationQuestionController;
 use App\Http\Controllers\Api\Auth\LoginController;
 use App\Http\Controllers\Api\Auth\PasswordResetController;
@@ -85,6 +91,7 @@ Route::middleware('auth:sanctum')->group(function () {
     Route::patch('/jobs/{id}', [JobController::class, 'update']);
     Route::patch('/jobs/{id}/status', [JobController::class, 'updateStatus']);
     Route::post('/jobs/{id}/assign', [JobController::class, 'assign']);
+    Route::get('/jobs/{id}/share-links', [JobController::class, 'shareLinks']);
 
     Route::get('/jobs/{jobId}/stages', [PipelineStageController::class, 'index']);
     Route::post('/jobs/{jobId}/stages', [PipelineStageController::class, 'store']);
@@ -128,6 +135,9 @@ Route::middleware('auth:sanctum')->group(function () {
     Route::get('/oauth/connections', [OAuthConnectionController::class, 'index']);
     Route::delete('/oauth/connections/{provider}', [OAuthConnectionController::class, 'disconnect']);
     Route::get('/oauth/google/connect', [OAuthConnectController::class, 'connectGoogle']);
+    // PRD Section 80 — "[Exit Impersonation]" button, called by the
+    // frontend using the active impersonation token itself.
+    Route::post('/exit-impersonation', [ImpersonationController::class, 'exit']);
     Route::get('/oauth/microsoft/connect', [OAuthConnectController::class, 'connectMicrosoft']);
 
     Route::get('/email-templates', [EmailTemplateController::class, 'index']);
@@ -178,3 +188,27 @@ Route::middleware('auth:sanctum')->group(function () {
 
 // Public — no access token needed, the refresh token itself is the credential
 Route::post('/refresh-token', [LoginController::class, 'refresh']);
+
+// ============================================================
+// SUPER ADMIN — PRD Section 76-85, 145. Completely separate auth
+// system (EnsureSuperAdmin middleware, not auth:sanctum) — see
+// bootstrap/app.php for the middleware alias registration.
+// ============================================================
+Route::prefix('super-admin')->group(function () {
+    // Public — no admin session exists yet at this point
+    Route::post('/auth/mfa/enroll', [SuperAdminAuthController::class, 'startMfaEnrollment']);
+    Route::post('/auth/mfa/confirm', [SuperAdminAuthController::class, 'confirmMfaEnrollment']);
+    Route::post('/auth/login', [SuperAdminAuthController::class, 'login']);
+
+    // Protected — EnsureSuperAdmin middleware
+    Route::middleware('super-admin')->group(function () {
+        Route::post('/auth/logout', [SuperAdminAuthController::class, 'logout']);
+        Route::get('/dashboard', [SuperAdminDashboardController::class, 'index']);
+        Route::get('/companies', [SuperAdminCompanyController::class, 'index']);
+        Route::get('/companies/{companyId}', [SuperAdminCompanyController::class, 'show']);
+        Route::post('/companies/{companyId}/suspend', [SuperAdminCompanyController::class, 'suspend']);
+        Route::post('/companies/{companyId}/reactivate', [SuperAdminCompanyController::class, 'reactivate']);
+        Route::post('/companies/{companyId}/users/{userId}/impersonate', [SuperAdminImpersonationController::class, 'start']);
+        Route::get('/audit-log', [SuperAdminAuditController::class, 'index']);
+    });
+});

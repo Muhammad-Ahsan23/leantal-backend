@@ -16,6 +16,15 @@ return Application::configure(basePath: dirname(__DIR__))
         $middleware->api(append: [
             \App\Http\Middleware\EnsureCompanyIsNotReadOnly::class,
         ]);
+
+        // 'super-admin' — PRD Section 145, used on the Super Admin
+        // route group (routes/api.php) via ->middleware('super-admin').
+        // Deliberately a NAMED alias (applied selectively to specific
+        // routes), not appended globally like EnsureCompanyIsNotReadOnly
+        // above — it must NEVER run on customer-facing routes.
+        $middleware->alias([
+            'super-admin' => \App\Http\Middleware\EnsureSuperAdmin::class,
+        ]);
     })
     ->withExceptions(function (Exceptions $exceptions): void {
         $exceptions->shouldRenderJsonWhen(

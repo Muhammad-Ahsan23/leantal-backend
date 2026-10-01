@@ -13,6 +13,7 @@ use App\Services\RefreshTokenService;
 use App\Services\RegionResolver;
 use App\Services\RegionRoutingRepository;
 use Illuminate\Http\Request;
+use Illuminate\Support\Facades\DB;
 use Illuminate\Support\Facades\Hash;
 use Illuminate\Support\Facades\Log;
 use Illuminate\Support\Facades\Mail;
@@ -20,10 +21,6 @@ use Illuminate\Support\Facades\RateLimiter;
 
 class LoginController extends Controller
 {
-    // Access tokens are short-lived on purpose — the refresh token is what
-    // actually carries the 30-day session (Section 15); the access token
-    // just limits how long a stolen one stays useful before it expires and
-    // a refresh is required.
     protected const ACCESS_TOKEN_MINUTES = 15;
 
     public function __construct(
@@ -71,6 +68,18 @@ class LoginController extends Controller
             RateLimiter::hit($throttleKey, 60);
             Log::info('Failed login attempt', ['email' => $email]);
             return $this->invalidCredentials();
+        }
+
+        // PRD Section 119 — "Suspension halts user login... while
+        // keeping all historical data intact." Checked AFTER password
+        // verification (not before) so a wrong-password attempt against
+        // a suspended company still gets the generic "invalid
+        // credentials" response — not leaking suspension status to
+        // someone who hasn't proven they know valid credentials yet.
+        $suspendedAt = DB::connection($connection)->table('companies')->where('id', $user->company_id)->value('suspended_at');
+        if ($suspendedAt) {
+            RateLimiter::hit($throttleKey, 60);
+            return response()->json(['message' => 'This account has been suspended. Please contact support.'], 403);
         }
 
         RateLimiter::clear($throttleKey);
