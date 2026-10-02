@@ -13,7 +13,10 @@ use Illuminate\Http\Request;
 
 class EmailController extends Controller
 {
-    public function __construct(protected EmailService $emails) {}
+    public function __construct(
+        protected EmailService $emails,
+        protected \App\Services\SystemEventLogger $systemEvents,
+    ) {}
 
     /**
      * PRD Section 57 — thread listing. Privacy filtering (system
@@ -108,6 +111,19 @@ class EmailController extends Controller
                 'log' => $this->emails->logManualEmail($candidate, $user, $data, $connection),
             };
         } catch (\RuntimeException $e) {
+            // PRD Section 82 — "failed email dispatches" must be
+            // visible in the Super Admin Debugging view, not just a
+            // text log line. Context carries enough to retry (which
+            // candidate/mode/template) from there.
+            $this->systemEvents->log('email', $e->getMessage(), $user->company_id, str_replace('pgsql_', '', $connection), [
+                'candidate_id' => $candidateId,
+                'mode' => $data['mode'],
+                'template_id' => $data['template_id'] ?? null,
+                'subject' => $data['subject'] ?? null,
+                'body' => $data['body'] ?? null,
+                'user_id' => $user->id,
+            ]);
+
             return response()->json(['message' => $e->getMessage()], 422);
         }
 

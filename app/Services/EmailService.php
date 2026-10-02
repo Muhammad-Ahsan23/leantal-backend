@@ -269,6 +269,41 @@ class EmailService
             ->get();
     }
 
+    /**
+     * PRD Section 82 — "safe retry triggers" for failed email
+     * dispatches. Re-runs the exact same send using the context stored
+     * at the time of the original failure — never an arbitrary
+     * operation, just replaying a known, specific action.
+     *
+     * @throws \RuntimeException if the candidate/user no longer exists, or the retry itself fails
+     */
+    public function retryFailedEmail(array $context, string $companyName, string $connection): Email
+    {
+        $candidate = Candidate::on($connection)->find($context['candidate_id']);
+        if (!$candidate) {
+            throw new \RuntimeException('Candidate no longer exists — cannot retry.');
+        }
+
+        $job = null;
+        $application = \App\Models\Application::on($connection)->where('candidate_id', $candidate->id)->latest('created_at')->first();
+        if ($application) {
+            $job = Job::on($connection)->find($application->job_id);
+        }
+
+        if ($context['mode'] === 'send_personal') {
+            $actor = User::on($connection)->find($context['user_id']);
+            if (!$actor) {
+                throw new \RuntimeException('The original sender no longer exists — cannot retry.');
+            }
+
+            return $this->sendPersonalEmail($candidate, $actor, $context['template_id'] ?? null, $context['subject'] ?? null, $context['body'] ?? null, $job, null, $companyName, $connection);
+        }
+
+        $actor = User::on($connection)->find($context['user_id']);
+
+        return $this->sendSystemEmail($candidate, $context['template_id'] ?? null, $context['subject'] ?? null, $context['body'] ?? null, $job, $actor, null, $companyName, $actor, $connection);
+    }
+
     protected function logActivity(string $connection, string $companyId, ?string $actorId, string $action, string $candidateId, array $metadata = []): void
     {
         DB::connection($connection)->table('activity')->insert([

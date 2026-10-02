@@ -8,6 +8,12 @@ use App\Http\Controllers\Api\SuperAdmin\SuperAdminDashboardController;
 use App\Http\Controllers\Api\SuperAdmin\SuperAdminCompanyController;
 use App\Http\Controllers\Api\SuperAdmin\SuperAdminAuditController;
 use App\Http\Controllers\Api\SuperAdmin\SuperAdminImpersonationController;
+use App\Http\Controllers\Api\SuperAdmin\SuperAdminDebuggingController;
+use App\Http\Controllers\Api\SuperAdmin\SuperAdminSystemHealthController;
+use App\Http\Controllers\Api\SuperAdmin\SuperAdminSearchController;
+use App\Http\Controllers\Api\SuperAdmin\SuperAdminFeatureFlagController;
+use App\Http\Controllers\Api\SuperAdmin\SuperAdminBlogController;
+use App\Http\Controllers\Api\SuperAdmin\SuperAdminNotificationController;
 use App\Http\Controllers\Api\ImpersonationController;
 use App\Http\Controllers\Api\ApplicationQuestionController;
 use App\Http\Controllers\Api\Auth\LoginController;
@@ -210,5 +216,21 @@ Route::prefix('super-admin')->group(function () {
         Route::post('/companies/{companyId}/reactivate', [SuperAdminCompanyController::class, 'reactivate']);
         Route::post('/companies/{companyId}/users/{userId}/impersonate', [SuperAdminImpersonationController::class, 'start']);
         Route::get('/audit-log', [SuperAdminAuditController::class, 'index']);
+        Route::get('/debugging', [SuperAdminDebuggingController::class, 'index']);
+        Route::post('/debugging/{eventId}/retry', [SuperAdminDebuggingController::class, 'retry']);
+        Route::get('/system-health', [SuperAdminSystemHealthController::class, 'index']);
+        Route::get('/search', [SuperAdminSearchController::class, 'index']);
+
+        Route::get('/feature-flags', [SuperAdminFeatureFlagController::class, 'index']);
+        Route::post('/feature-flags', [SuperAdminFeatureFlagController::class, 'save']);
+        Route::delete('/feature-flags/{id}', [SuperAdminFeatureFlagController::class, 'destroy']);
+
+        Route::get('/blog', [SuperAdminBlogController::class, 'index']);
+        Route::get('/blog/{id}', [SuperAdminBlogController::class, 'show']);
+        Route::post('/blog', [SuperAdminBlogController::class, 'store']);
+        Route::patch('/blog/{id}', [SuperAdminBlogController::class, 'update']);
+        Route::delete('/blog/{id}', [SuperAdminBlogController::class, 'destroy']);
+
+        Route::post('/notifications/broadcast', [SuperAdminNotificationController::class, 'broadcast']);
     });
 });

@@ -18,6 +18,7 @@ class InterviewService
         protected GoogleCalendarService $googleCalendar,
         protected MicrosoftGraphCalendarService $microsoftCalendar,
         protected NotificationService $notifications,
+        protected SystemEventLogger $systemEvents,
     ) {}
 
     /**
@@ -152,6 +153,15 @@ class InterviewService
                 'interview_id' => $interview->id,
                 'message' => $e->getMessage(),
             ]);
+
+            // PRD Section 82 — "calendar sync errors" with "safe retry
+            // triggers." context.interview_id is what a retry needs to
+            // re-attempt the exact same createEvent() call.
+            $this->systemEvents->log('calendar_sync', $e->getMessage(), $interview->company_id, str_replace('pgsql_', '', $connection), [
+                'interview_id' => $interview->id,
+                'operation' => 'create',
+                'provider' => $provider,
+            ]);
         }
     }
 
@@ -182,6 +192,12 @@ class InterviewService
                 'interview_id' => $interview->id,
                 'message' => $e->getMessage(),
             ]);
+
+            $this->systemEvents->log('calendar_sync', $e->getMessage(), $interview->company_id, str_replace('pgsql_', '', $connection), [
+                'interview_id' => $interview->id,
+                'operation' => 'update',
+                'provider' => $interview->provider,
+            ]);
         }
     }
 
@@ -209,7 +225,36 @@ class InterviewService
                 'interview_id' => $interview->id,
                 'message' => $e->getMessage(),
             ]);
+
+            $this->systemEvents->log('calendar_sync', $e->getMessage(), $interview->company_id, str_replace('pgsql_', '', $connection), [
+                'interview_id' => $interview->id,
+                'operation' => 'delete',
+                'provider' => $interview->provider,
+            ]);
         }
+    }
+
+    /**
+     * PRD Section 82 — "safe retry triggers" for calendar sync errors.
+     * Re-runs the SAME sync operation that originally failed, using
+     * the interview's own current data — never arbitrary/raw
+     * operations, just re-attempting a known, specific action.
+     *
+     * @throws \RuntimeException if the interview no longer exists
+     */
+    public function retrySync(string $interviewId, string $operation, string $connection): void
+    {
+        $interview = Interview::on($connection)->find($interviewId);
+        if (!$interview) {
+            throw new \RuntimeException('Interview not found — it may have been cancelled since this failure was logged.');
+        }
+
+        match ($operation) {
+            'create' => $this->trySyncCreate($interview, $interview->toArray(), $interview->provider, $connection),
+            'update' => $this->trySyncUpdate($interview, $connection),
+            'delete' => $this->trySyncDelete($interview, $connection),
+            default => throw new \RuntimeException("Unknown retry operation '{$operation}'."),
+        };
     }
 
     protected function logActivity(string $connection, string $companyId, string $actorId, string $action, Interview $interview, array $metadata = []): void
