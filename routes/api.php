@@ -1,6 +1,8 @@
 <?php
 
 use App\Http\Controllers\Api\AccountController;
+use App\Http\Controllers\Api\CandidateExportController;
+use App\Http\Controllers\Api\CandidateImportController;
 use App\Http\Controllers\Api\ActivityController;
 use App\Http\Controllers\Api\ApplicationController;
 use App\Http\Controllers\Api\SuperAdmin\SuperAdminAuthController;
@@ -113,6 +115,10 @@ Route::middleware('auth:sanctum')->group(function () {
 
     Route::get('/candidates', [CandidateController::class, 'index']);
     Route::post('/candidates', [CandidateController::class, 'store']);
+    Route::get('/candidates/export', [CandidateExportController::class, 'export']);
+    Route::post('/candidates/import/headers', [CandidateImportController::class, 'headers']);
+    Route::post('/candidates/import/preview', [CandidateImportController::class, 'preview']);
+    Route::post('/candidates/import/confirm', [CandidateImportController::class, 'confirm']);
     Route::get('/candidates/{id}', [CandidateController::class, 'show']);
     Route::patch('/candidates/{id}/archive', [CandidateController::class, 'archive']);
     Route::delete('/candidates/{id}', [CandidateController::class, 'destroy']);

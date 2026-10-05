@@ -14,10 +14,28 @@ class EnsureCompanyIsNotReadOnly
      * creation actions." Applied broadly (whole authenticated API), but
      * ONLY blocks non-GET/HEAD requests — reads always pass through
      * untouched, so this is safe to attach without restructuring routes.
+     *
+     * BUG FIX (confirmed via code review — a frontend-side Claude
+     * session flagged this as a suspected issue without access to this
+     * file, and it was right): /logout and /logout-all are POST routes
+     * with no exemption, so a read_only company would get a 403
+     * "trial has ended" response INSTEAD OF logging out — trapping the
+     * user in their own session. Logging out must always be allowed
+     * regardless of billing/suspension state; it's not an "editing/
+     * creation action" PRD Section 10 is talking about blocking.
      */
+    protected const EXEMPT_PATHS = [
+        'api/logout',
+        'api/logout-all',
+    ];
+
     public function handle(Request $request, Closure $next)
     {
         if ($request->isMethod('get') || $request->isMethod('head')) {
+            return $next($request);
+        }
+
+        if ($request->is(...self::EXEMPT_PATHS)) {
             return $next($request);
         }
 
