@@ -16,11 +16,10 @@ class DeleteCompanyRequest extends FormRequest
         return [
             // PRD Section 71 — "Require typing DELETE."
             'confirmation' => ['required', 'in:DELETE'],
-            // PRD Section 71 step 3 — "Prompt for candidate data
-            // retention/deletion preferences." Values are a reasonable
-            // ASSUMPTION (PRD names the step but not the exact choices)
-            // — adjust once the client confirms exact wording/options.
-            'data_retention_choice' => ['required', 'in:delete_immediately,retain_30_days,export_then_delete'],
+            // Client decision: deletion is permanent and immediate — there is no
+            // retention choice any more. Still ACCEPTED (and ignored) so an older
+            // frontend that keeps sending it doesn't get a validation error.
+            'data_retention_choice' => ['sometimes', 'nullable'],
         ];
     }
 

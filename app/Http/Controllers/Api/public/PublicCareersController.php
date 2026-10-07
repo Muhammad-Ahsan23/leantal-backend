@@ -153,6 +153,15 @@ class PublicCareersController extends Controller
 
     protected function resolveCompany(string $slug): ?array
     {
-        return $this->routing->findCompanyBySlug($slug);
+        $company = $this->routing->findCompanyBySlug($slug);
+        if (!$company) {
+            return null;
+        }
+
+        // PRD Section 71 — a deleted company's careers page must stop serving.
+        $deletedAt = DB::connection(RegionResolver::connectionFor($company['region']))
+            ->table('companies')->where('id', $company['company_id'])->value('deleted_at');
+
+        return $deletedAt ? null : $company;
     }
 }

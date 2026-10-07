@@ -4,6 +4,7 @@ namespace App\Services;
 
 use App\Models\Company;
 use Illuminate\Support\Facades\Http;
+use Illuminate\Support\Facades\Log;
 
 class CreemService
 {
@@ -125,6 +126,46 @@ class CreemService
         }
 
         return $response->json();
+    }
+
+    /**
+     * Cancels a subscription IMMEDIATELY (no further charges). Used when a
+     * company is permanently deleted. Verified against Creem's API reference
+     * (docs.creem.io): POST /v1/subscriptions/{id}/cancel with {"mode":"immediate"};
+     * 404 = Creem no longer has it. If the cancel call fails we double-check the
+     * subscription's real status, so one that is ALREADY cancelled (e.g. the
+     * customer cancelled it earlier in the portal) never blocks the deletion.
+     *
+     * @throws \RuntimeException (user-safe message) if it could not be cancelled
+     */
+    public function cancelSubscription(string $subscriptionId): void
+    {
+        $headers = ['x-api-key' => config('services.creem.api_key')];
+
+        $response = Http::withHeaders($headers)
+            ->post($this->apiBase()."/v1/subscriptions/{$subscriptionId}/cancel", ['mode' => 'immediate']);
+
+        if ($response->successful() || $response->status() === 404) {
+            return;
+        }
+
+        $status = Http::withHeaders($headers)
+            ->get($this->apiBase().'/v1/subscriptions', ['subscription_id' => $subscriptionId]);
+
+        if ($status->successful() && $status->json('status') === 'canceled') {
+            return;
+        }
+
+        Log::warning('Creem subscription cancel failed during company deletion', [
+            'subscription_id' => $subscriptionId,
+            'http_status' => $response->status(),
+            'body' => $response->body(),
+        ]);
+
+        throw new \RuntimeException(
+            "We couldn't cancel your subscription with our payment provider, so nothing was deleted. "
+            .'Please try again in a few minutes or contact support.'
+        );
     }
 
     /**

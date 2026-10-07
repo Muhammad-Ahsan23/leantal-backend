@@ -96,9 +96,15 @@ class CreemWebhookController extends Controller
             return response()->json(['message' => 'Already processed.'], 200);
         }
 
-        $this->logEvent($eventId, $eventType, $payload);
-
         $companyId = $object['metadata']['company_id'] ?? null;
+
+        // PRIVACY: a payload carries the customer's email/name. When the company has
+        // been permanently deleted, the cancellation event OUR OWN deletion triggers
+        // arrives AFTER its data is gone — storing it would bring that personal data
+        // straight back. For an unknown company only the event id/type are kept
+        // (that is all idempotency needs); the payload is redacted.
+        $companyGone = $companyId && $this->routing->findRegionByCompanyId($companyId) === null;
+        $this->logEvent($eventId, $eventType, $companyGone ? ['redacted' => 'company no longer exists'] : $payload);
 
         if (!$companyId) {
             Log::warning('Creem webhook: no company_id in metadata', ['event_id' => $eventId, 'event_type' => $eventType]);

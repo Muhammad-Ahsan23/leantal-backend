@@ -6,9 +6,12 @@ use App\Http\Controllers\Controller;
 use App\Http\Requests\CustomFields\CreateCustomFieldRequest;
 use App\Http\Requests\CustomFields\SetCustomFieldValuesRequest;
 use App\Http\Requests\CustomFields\UpdateCustomFieldRequest;
+use App\Models\Candidate;
 use App\Models\CustomField;
+use App\Models\Job;
 use App\Services\CustomFieldService;
 use Illuminate\Http\Request;
+use Illuminate\Support\Str;
 
 class CustomFieldController extends Controller
 {
@@ -116,21 +119,56 @@ class CustomFieldController extends Controller
             return response()->json(['message' => 'You do not have permission to edit this.'], 403);
         }
 
-        $errors = $this->customFields->validateValues($data['entity_type'], $data['values'], $connection);
+        $errors = $this->customFields->validateValues($data['entity_type'], $data['values'], $user->company_id, $connection);
         if (!empty($errors)) {
             return response()->json(['message' => 'Validation failed.', 'errors' => $errors], 422);
         }
 
         $this->customFields->setValues($data['entity_id'], $data['values'], $connection);
 
-        return response()->json(['values' => $this->customFields->getValues($data['entity_type'], $data['entity_id'], $connection)]);
+        return response()->json(['values' => $this->customFields->getValues($data['entity_type'], $data['entity_id'], $user->company_id, $connection)]);
     }
 
+    /**
+     * SECURITY FIX — this method previously passed the URL's entityType/
+     * entityId straight to the service with NO company scoping and NO
+     * permission check, unlike setValues() above. Two real holes:
+     * (1) anyone holding another company's candidate/job UUID could read
+     *     that entity's custom values (cross-tenant leak, PRD Section 104);
+     * (2) a Recruiter could read custom values of candidates/jobs NOT
+     *     assigned to them, bypassing the "only what is assigned to you"
+     *     rule (PRD Section 7).
+     * Reading a value is gated by the same rule as viewing the underlying
+     * Job/Candidate itself — 'view', not 'update' (this endpoint only reads).
+     *
+     * Unlike setValues(), whose FormRequest validates entity_type/entity_id,
+     * here both come from the URL unvalidated — so they are checked
+     * explicitly. A malformed UUID is answered with 404 rather than being
+     * passed to Postgres, which would raise a 500 on an invalid uuid.
+     */
     public function getValues(Request $request, string $entityType, string $entityId)
     {
         $user = $request->user();
         $connection = $user->getConnectionName();
 
-        return response()->json(['values' => $this->customFields->getValues($entityType, $entityId, $connection)]);
+        if (!in_array($entityType, ['job', 'candidate'], true) || !Str::isUuid($entityId)) {
+            return response()->json(['message' => 'Not found.'], 404);
+        }
+
+        $model = $entityType === 'job' ? Job::class : Candidate::class;
+
+        // Scoped to the caller's own company: another tenant's entity is
+        // simply "not found" — its existence is never confirmed.
+        $entity = $model::on($connection)->where('company_id', $user->company_id)->find($entityId);
+
+        if (!$entity) {
+            return response()->json(['message' => ucfirst($entityType).' not found.'], 404);
+        }
+
+        if (!$user->can('view', $entity)) {
+            return response()->json(['message' => 'You do not have permission to view this.'], 403);
+        }
+
+        return response()->json(['values' => $this->customFields->getValues($entityType, $entityId, $user->company_id, $connection)]);
     }
 }

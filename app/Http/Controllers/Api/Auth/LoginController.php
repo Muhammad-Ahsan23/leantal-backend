@@ -82,6 +82,12 @@ class LoginController extends Controller
             return response()->json(['message' => 'This account has been suspended. Please contact support.'], 403);
         }
 
+        // PRD Section 71 — a deleted company must not be able to log in again.
+        if ($this->companyIsDeleted($connection, $user->company_id)) {
+            RateLimiter::hit($throttleKey, 60);
+            return response()->json(['message' => 'This company account has been deleted.'], 403);
+        }
+
         RateLimiter::clear($throttleKey);
 
         $otpSendKey = 'otp-send:'.$email;
@@ -140,6 +146,12 @@ class LoginController extends Controller
         }
 
         RateLimiter::clear($throttleKey);
+
+        // Same guard as login(): the company may have been deleted between the
+        // password step and the OTP step.
+        if ($this->companyIsDeleted($connection, $user->company_id)) {
+            return response()->json(['message' => 'This company account has been deleted.'], 403);
+        }
 
         $user->forceFill(['last_login_at' => now()])->save();
         Log::info('Successful login', ['email' => $email]);
@@ -238,6 +250,11 @@ class LoginController extends Controller
                 'company_id' => $user->company_id,
             ],
         ]);
+    }
+
+    protected function companyIsDeleted(string $connection, string $companyId): bool
+    {
+        return (bool) DB::connection($connection)->table('companies')->where('id', $companyId)->value('deleted_at');
     }
 
     protected function invalidCredentials()

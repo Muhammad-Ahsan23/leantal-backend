@@ -8,6 +8,7 @@ use App\Http\Requests\Company\TransferOwnershipRequest;
 use App\Http\Requests\Company\UpdateCompanyRequest;
 use App\Models\Company;
 use App\Models\User;
+use App\Services\CompanyPurgeService;
 use Illuminate\Http\Request;
 use Illuminate\Support\Facades\DB;
 
@@ -104,16 +105,11 @@ class CompanyController extends Controller
     }
 
     /**
-     * PRD Section 71 — Company Deletion. Requires typing "DELETE" (PRD's
-     * exact confirmation word) + a data-retention preference. This marks
-     * the company for deletion (deletion_requested_at, data_retention_
-     * choice, deleted_at — all pre-existing columns on this table) —
-     * it does NOT synchronously purge every candidate/job/application
-     * row here. "Execute deletion safely" (PRD's own wording) reads as
-     * a careful, likely background process, not an instant cascade —
-     * actually purging data is a follow-up job, not built in this pass.
+     * PRD Section 71 — permanent deletion. Client decision: no soft delete, no
+     * retention options — the Owner's confirmation erases the company and ALL of
+     * its data immediately (see CompanyPurgeService for exactly what that covers).
      */
-    public function delete(DeleteCompanyRequest $request)
+    public function delete(DeleteCompanyRequest $request, CompanyPurgeService $purge)
     {
         $user = $request->user();
         $connection = $user->getConnectionName();
@@ -122,26 +118,29 @@ class CompanyController extends Controller
             return response()->json(['message' => 'Only the Owner can delete the company.'], 403);
         }
 
+        // A Super Admin impersonating an Owner must never be able to destroy a
+        // customer's company. NB: PersonalAccessToken::can() is true for ANY token
+        // holding the '*' wildcard, so the ability list is checked directly.
+        $abilities = $user->currentAccessToken()?->abilities ?? [];
+        if (in_array('impersonation', $abilities, true)) {
+            return response()->json(['message' => 'A company cannot be deleted while impersonating a user.'], 403);
+        }
+
         $company = Company::on($connection)->find($user->company_id);
-        $data = $request->validated();
+        if (!$company) {
+            return response()->json(['message' => 'Company not found.'], 404);
+        }
 
-        $company->update([
-            'deletion_requested_at' => now(),
-            'data_retention_choice' => $data['data_retention_choice'],
-            'deleted_at' => now(),
-        ]);
+        try {
+            $purge->purge($company, $connection);
+        } catch (\RuntimeException $e) {
+            return response()->json(['message' => $e->getMessage()], 422);
+        } catch (\Throwable $e) {
+            \Illuminate\Support\Facades\Log::error('Company deletion failed', ['company_id' => $company->id, 'message' => $e->getMessage()]);
 
-        DB::connection($connection)->table('activity')->insert([
-            'id' => (string) \Illuminate\Support\Str::uuid(),
-            'company_id' => $user->company_id,
-            'actor_id' => $user->id,
-            'action' => 'company.deletion_requested',
-            'object_type' => 'company',
-            'object_id' => $user->company_id,
-            'metadata' => json_encode(['data_retention_choice' => $data['data_retention_choice']]),
-            'created_at' => now(),
-        ]);
+            return response()->json(['message' => 'Deleting the company failed and nothing was deleted. Please try again or contact support.'], 500);
+        }
 
-        return response()->json(['message' => 'Company deletion has been initiated.']);
+        return response()->json(['message' => 'Your company and all of its data have been permanently deleted.']);
     }
 }

@@ -22,6 +22,17 @@ class Company extends Model
         'subscription_status',
         'trial_start',
         'trial_end',
+        // BUG FIX: these were missing, so Eloquent's mass-assignment
+        // protection silently DROPPED them on every ->update([...]):
+        //  - deletion trio: CompanyController::delete() never persisted anything
+        //  - Creem ids: CreemWebhookController saved plan/status but never the
+        //    customer/subscription ids (portal + plan-change need them)
+        // All callers pass controlled/validated arrays, never raw request input.
+        'deletion_requested_at',
+        'data_retention_choice',
+        'deleted_at',
+        'creem_customer_id',
+        'creem_subscription_id',
     ];
 
     protected $casts = [

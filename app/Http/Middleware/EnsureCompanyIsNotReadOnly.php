@@ -27,6 +27,11 @@ class EnsureCompanyIsNotReadOnly
     protected const EXEMPT_PATHS = [
         'api/logout',
         'api/logout-all',
+        // A company whose trial ended must still be able to erase its own data
+        // (PRD Section 72 — erasure) — and to pay (PRD Section 10).
+        'api/company/delete',
+        'api/billing/checkout',
+        'api/billing/portal',
     ];
 
     public function handle(Request $request, Closure $next)
