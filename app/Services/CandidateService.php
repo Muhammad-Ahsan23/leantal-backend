@@ -130,6 +130,29 @@ class CandidateService
      * PRD Section 37 — archive is reversible (status flag), unlike
      * delete() below which is a soft-delete via deleted_at.
      */
+    /**
+     * PRD Section 37 — a candidate is either Active or Archived, so an archived one must be able to go
+     * back to Active. Exactly the reverse of archive(): only the status changes (archiving changed
+     * nothing else). Idempotent — restoring a candidate that is already active changes nothing and
+     * logs nothing, so a double click or a stale screen is harmless.
+     */
+    public function restore(Candidate $candidate, User $actor, string $connection): Candidate
+    {
+        if ($candidate->status !== 'archived') {
+            return $candidate;
+        }
+
+        $candidate->update(['status' => 'active', 'archived_at' => null]);
+
+        $this->logActivity($connection, $candidate->company_id, $actor->id, 'candidate.restored', 'candidate', $candidate->id, [
+            'candidate_name' => $candidate->name,
+        ]);
+
+        $this->forgetCandidatesCache($candidate->company_id);
+
+        return $candidate->fresh();
+    }
+
     public function archive(Candidate $candidate, User $actor, string $connection): Candidate
     {
         $candidate->update(['status' => 'archived', 'archived_at' => now()]);

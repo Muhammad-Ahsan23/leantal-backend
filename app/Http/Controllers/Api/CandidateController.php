@@ -106,6 +106,29 @@ class CandidateController extends Controller
     /**
      * PRD Section 37 — reversible archive. Owner/HM only (CandidatePolicy).
      */
+    /**
+     * Reverse of archive(). Same rule as archiving (PRD permissions table: Owner Yes, Hiring Manager
+     * Yes, Recruiter No) — whoever may archive a candidate may bring them back.
+     */
+    public function restore(Request $request, string $id)
+    {
+        $user = $request->user();
+        $connection = $user->getConnectionName();
+        $candidate = Candidate::on($connection)->find($id);
+
+        if (!$candidate) {
+            return response()->json(['message' => 'Candidate not found.'], 404);
+        }
+
+        if (!$user->can('archive', $candidate)) {
+            return response()->json(['message' => 'You do not have permission to restore this candidate.'], 403);
+        }
+
+        $candidate = $this->candidates->restore($candidate, $user, $connection);
+
+        return response()->json(['candidate' => $candidate]);
+    }
+
     public function archive(Request $request, string $id)
     {
         $user = $request->user();

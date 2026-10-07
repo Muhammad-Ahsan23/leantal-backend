@@ -31,6 +31,10 @@ class SendEmailRequest extends FormRequest
             // ({{interview.date}}, {{meeting_link}}) — omit if not
             // relevant to this send.
             'interview_id' => ['nullable', 'uuid'],
+            // Which of the candidate's applications this email is about (PRD Section 32: one
+            // candidate can apply to several jobs). A rejection is about ONE of them, so {{job.title}}
+            // must come from that application's job, not just the candidate's latest application.
+            'application_id' => ['nullable', 'uuid'],
             // Only meaningful for mode=log:
             'direction' => ['nullable', 'in:outbound,inbound'],
             'provider' => ['nullable', 'in:gmail,outlook'],

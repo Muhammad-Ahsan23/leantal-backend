@@ -122,6 +122,7 @@ Route::middleware('auth:sanctum')->group(function () {
     Route::post('/candidates/import/confirm', [CandidateImportController::class, 'confirm']);
     Route::get('/candidates/{id}', [CandidateController::class, 'show']);
     Route::patch('/candidates/{id}/archive', [CandidateController::class, 'archive']);
+    Route::patch('/candidates/{id}/restore', [CandidateController::class, 'restore']);
     Route::delete('/candidates/{id}', [CandidateController::class, 'destroy']);
     Route::post('/candidates/{id}/assign', [CandidateController::class, 'assign']);
     Route::get('/candidates/{id}/notes', [CandidateController::class, 'listNotes']);

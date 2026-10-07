@@ -101,6 +101,21 @@ class EmailController extends Controller
             $job = Job::on($connection)->find($application->job_id);
         }
 
+        // The caller says WHICH application the email is about (e.g. the one just rejected): its job
+        // wins over "latest application". An id that is not this candidate's is refused rather than
+        // silently falling back to a different job's title in a rejection email.
+        if ($data['application_id'] ?? null) {
+            $selected = \App\Models\Application::on($connection)
+                ->where('candidate_id', $candidateId)
+                ->find($data['application_id']);
+
+            if (!$selected) {
+                return response()->json(['message' => 'That application does not belong to this candidate.'], 404);
+            }
+
+            $job = Job::on($connection)->find($selected->job_id);
+        }
+
         // Best-effort context for template variables ({{interview.date}},
         // {{meeting_link}}) — only overrides $job if this specific
         // interview points to a different one than the latest application.
@@ -137,7 +152,14 @@ class EmailController extends Controller
                 'user_id' => $user->id,
             ]);
 
-            return response()->json(['message' => $e->getMessage()], 422);
+            // A mail-TRANSPORT failure (SMTP down / wrong credentials) carries server and username
+            // details in its message: those stay in the Debugging log above, the user gets a plain one.
+            // Our own messages (template errors, "connect your Gmail first") are meant for the user.
+            $message = $e instanceof \Symfony\Component\Mailer\Exception\TransportExceptionInterface
+                ? "We couldn't send the email right now. Please try again in a few minutes."
+                : $e->getMessage();
+
+            return response()->json(['message' => $message], 422);
         }
 
         return response()->json(['email' => $email], 201);
