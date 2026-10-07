@@ -9,6 +9,7 @@ use App\Models\Company;
 use App\Models\Interview;
 use App\Models\Job;
 use App\Services\EmailService;
+use App\Support\EmailText;
 use Illuminate\Http\Request;
 
 class EmailController extends Controller
@@ -39,7 +40,19 @@ class EmailController extends Controller
             return response()->json(['message' => 'You do not have permission to view this candidate.'], 403);
         }
 
-        $emails = $this->emails->listForCandidate($candidateId, $user, $connection);
+        $emails = $this->emails->listForCandidate($candidateId, $user, $connection)
+            ->map(function ($email) {
+                // Stored bodies are HTML. The app shows only these plain-text fields, so no sender
+                // HTML ever reaches the browser; the quoted history is kept separate, not discarded.
+                $parts = EmailText::split($email->body);
+                $email->setAttribute('body_text', $parts['text']);
+                $email->setAttribute('quoted_text', $parts['quoted']);
+
+                return $email;
+            });
+
+        // The list above was read first, so this response still shows what was new.
+        $this->emails->markThreadRead($candidateId, $user, $connection);
 
         return response()->json(['emails' => $emails]);
     }

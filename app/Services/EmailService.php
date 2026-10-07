@@ -256,6 +256,20 @@ class EmailService
      * to the user_id that sent them, "strictly personal" per PRD —
      * this applies even to the Owner.
      */
+    /**
+     * Opening a conversation = reading it. Marks the VIEWER's own unread replies from
+     * this candidate as read (other users' mail is never touched).
+     */
+    public function markThreadRead(string $candidateId, User $viewer, string $connection): void
+    {
+        Email::on($connection)
+            ->where('candidate_id', $candidateId)
+            ->where('user_id', $viewer->id)
+            ->where('direction', 'inbound')
+            ->whereNull('read_at')
+            ->update(['read_at' => now()]);
+    }
+
     public function listForCandidate(string $candidateId, User $viewer, string $connection): \Illuminate\Support\Collection
     {
         return Email::on($connection)

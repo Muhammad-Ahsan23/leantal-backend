@@ -13,11 +13,12 @@ class Email extends Model
 
     protected $fillable = [
         'company_id', 'user_id', 'candidate_id', 'direction', 'provider',
-        'thread_id', 'subject', 'body', 'sent_at',
+        'thread_id', 'subject', 'body', 'sent_at', 'read_at',
     ];
 
     protected $casts = [
         'sent_at' => 'datetime',
+        'read_at' => 'datetime', // null = a received email its owner has not opened yet
     ];
 
     public function candidate()

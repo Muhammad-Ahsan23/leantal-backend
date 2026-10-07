@@ -28,6 +28,7 @@ use App\Http\Controllers\Api\CreemWebhookController;
 use App\Http\Controllers\Api\CustomFieldController;
 use App\Http\Controllers\Api\DepartmentController;
 use App\Http\Controllers\Api\EmailController;
+use App\Http\Controllers\Api\InboxController;
 use App\Http\Controllers\Api\EmailTemplateController;
 use App\Http\Controllers\Api\GmailPushWebhookController;
 use App\Http\Controllers\Api\MicrosoftGraphWebhookController;
@@ -160,6 +161,11 @@ Route::middleware('auth:sanctum')->group(function () {
 
     Route::get('/candidates/{candidateId}/emails', [EmailController::class, 'index']);
     Route::post('/candidates/{candidateId}/emails', [EmailController::class, 'store']);
+
+    // PRD Section 53 — the user's own inbox (Inbox / Sent). Strictly personal.
+    Route::get('/emails', [InboxController::class, 'index']);
+    Route::get('/emails/unread-count', [InboxController::class, 'unreadCount']);
+    Route::post('/emails/mark-all-read', [InboxController::class, 'markAllRead']);
 
     Route::get('/company', [CompanyController::class, 'show']);
     Route::patch('/company', [CompanyController::class, 'update']);
