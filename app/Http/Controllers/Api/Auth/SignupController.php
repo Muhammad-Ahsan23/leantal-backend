@@ -12,6 +12,8 @@ use App\Services\RegionRoutingRepository;
 use App\Services\SlugGenerator;
 use Illuminate\Support\Facades\DB;
 use Illuminate\Support\Facades\Hash;
+use Illuminate\Support\Facades\Log;
+use Illuminate\Support\Facades\RateLimiter;
 
 class SignupController extends Controller
 {
@@ -23,6 +25,26 @@ class SignupController extends Controller
     public function store(SignupRequest $request)
     {
         $data = $request->validated();
+
+        // 0a. Throttle per IP — signup creates a company, a user and sends mail, so it is the most
+        //     expensive public endpoint to spam. 5 attempts per hour per IP.
+        $throttleKey = 'signup:'.$request->ip();
+        if (RateLimiter::tooManyAttempts($throttleKey, 5)) {
+            return response()->json([
+                'message' => 'Too many sign-up attempts. Please try again later.',
+            ], 429);
+        }
+        RateLimiter::hit($throttleKey, 3600);
+
+        // 0b. One email = one account (PRD Section 15: login finds the company from the email alone).
+        //     Checked BEFORE anything is created, so a taken email can never leave a half-made company.
+        $ownerEmail = strtolower(trim($data['company_email']));
+        if ($this->routing->findRegionByEmail($ownerEmail) !== null) {
+            return response()->json([
+                'message' => 'An account with this email already exists. Please log in instead.',
+                'errors' => ['company_email' => ['An account with this email already exists.']],
+            ], 422);
+        }
 
         // 1. CAPTCHA (Section 14) — verified before anything else touches the DB
         if (!$this->captcha->verify($data['captcha_token'])) {
@@ -44,7 +66,7 @@ class SignupController extends Controller
         //    REGIONAL CONNECTION — this is what makes data residency work:
         //    the company row, and every row ever related to it, lives in
         //    exactly one region's database.
-        [$company, $owner] = DB::connection($connection)->transaction(function () use ($data, $region, $slug, $connection) {
+        [$company, $owner] = DB::connection($connection)->transaction(function () use ($data, $region, $slug, $connection, $ownerEmail) {
 
             $company = Company::on($connection)->create([
                 'name' => $data['company_name'],
@@ -62,7 +84,7 @@ class SignupController extends Controller
             $owner = User::on($connection)->create([
                 'company_id' => $company->id,
                 'name' => $data['owner_name'],
-                'email' => strtolower(trim($data['company_email'])),
+                'email' => $ownerEmail,
                 'password_hash' => Hash::make($data['password']), // Argon2id — see config/hashing.php
                 'role' => 'owner',
                 'status' => 'active',
@@ -75,8 +97,40 @@ class SignupController extends Controller
         // 5. Routing DB entries — MUST happen after the regional transaction
         //    commits, so routing never points to a company that doesn't
         //    actually exist yet.
-        $this->routing->recordCompany($company->id, $company->slug, $region);
-        $this->routing->recordUserEmail($owner->email, $company->id, $region);
+        try {
+            $this->routing->recordCompany($company->id, $company->slug, $region);
+
+            // Atomic claim: if someone signed up with this email a moment ago (race), we lose cleanly.
+            if (!$this->routing->claimUserEmail($owner->email, $company->id, $region)) {
+                throw new \RuntimeException('email_taken');
+            }
+        } catch (\Throwable $e) {
+            // The regional rows are already committed — remove them, and the company routing row,
+            // so a failed signup never leaves an orphan company behind.
+            try {
+                DB::connection($connection)->transaction(function () use ($company, $connection) {
+                    User::on($connection)->where('company_id', $company->id)->delete();
+                    Company::on($connection)->where('id', $company->id)->delete();
+                });
+                DB::connection('routing_db')->table('company_region_lookup')->where('company_id', $company->id)->delete();
+            } catch (\Throwable $cleanup) {
+                Log::error('Signup cleanup failed — orphan company needs manual removal', [
+                    'company_id' => $company->id,
+                    'error' => $cleanup->getMessage(),
+                ]);
+            }
+
+            if ($e->getMessage() === 'email_taken') {
+                return response()->json([
+                    'message' => 'An account with this email already exists. Please log in instead.',
+                    'errors' => ['company_email' => ['An account with this email already exists.']],
+                ], 422);
+            }
+
+            Log::error('Signup failed while recording routing', ['error' => $e->getMessage()]);
+
+            return response()->json(['message' => 'We could not complete your sign-up. Please try again.'], 500);
+        }
 
         // TODO: dispatch a queued job here to send the Owner a welcome /
         // verification email once the mail/queue infrastructure is wired up.

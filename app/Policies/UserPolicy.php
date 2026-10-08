@@ -53,6 +53,20 @@ class UserPolicy
     }
 
     /**
+     * PRD Section 68 — "Users: Owner: Invite, remove, change roles." Only the Owner, only for another
+     * member of the same company, and never for the Owner seat itself (that moves only through
+     * ownership transfer — "exactly one Owner exists at all times", Section 69). Hiring Managers and
+     * Recruiters cannot change anyone's role (Section 6 "cannot": change the Owner / invite arbitrary users).
+     */
+    public function changeRole(User $actor, User $target): bool
+    {
+        return $actor->role === Roles::OWNER
+            && $actor->company_id === $target->company_id
+            && $actor->id !== $target->id
+            && $target->role !== Roles::OWNER;
+    }
+
+    /**
      * Editing account details. Every user may edit their own profile;
      * beyond that, the PRD doesn't detail cross-user editing, so this
      * stays conservative — Owner can manage others' role, HM/Recruiter

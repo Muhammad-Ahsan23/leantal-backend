@@ -64,14 +64,22 @@ class CreemService
      */
     public function createBillingPortalSession(string $creemCustomerId): string
     {
+        // Creem docs: POST /v1/customers/billing  { "customer_id": "cust_..." }  ->  { "customer_portal_link": "https://..." }
         $response = Http::withHeaders(['x-api-key' => config('services.creem.api_key')])
-            ->post($this->apiBase()."/v1/customers/{$creemCustomerId}/portal");
+            ->post($this->apiBase().'/v1/customers/billing', [
+                'customer_id' => $creemCustomerId,
+            ]);
 
         if (!$response->successful()) {
             throw new \RuntimeException('Creem portal session creation failed: '.$response->body());
         }
 
-        return $response->json('url');
+        $link = $response->json('customer_portal_link');
+        if (!$link) {
+            throw new \RuntimeException('Creem did not return a portal link.');
+        }
+
+        return $link;
     }
 
     /**

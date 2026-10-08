@@ -48,13 +48,13 @@ use Illuminate\Support\Facades\Route;
 Route::post('/signup', [SignupController::class, 'store']);
 
 Route::post('/login', [LoginController::class, 'login']);
-Route::post('/login/verify-otp', [LoginController::class, 'verifyOtp']);
+Route::post('/login/verify-otp', [LoginController::class, 'verifyOtp'])->middleware('throttle:10,1');
 
 Route::post('/forgot-password', [PasswordResetController::class, 'forgotPassword']);
-Route::post('/reset-password', [PasswordResetController::class, 'reset']);
+Route::post('/reset-password', [PasswordResetController::class, 'reset'])->middleware('throttle:10,1');
 
 // Public — the invitation token itself is the credential, no login needed
-Route::post('/accept-invite', [UserController::class, 'acceptInvite']);
+Route::post('/accept-invite', [UserController::class, 'acceptInvite'])->middleware('throttle:10,1');
 
 // Public — Creem calls this directly; authenticated via HMAC signature
 // instead of a Bearer token (see CreemWebhookController).
@@ -93,6 +93,7 @@ Route::middleware('auth:sanctum')->group(function () {
     Route::get('/users', [UserController::class, 'index']);
     Route::post('/users/invite', [UserController::class, 'invite']);
     Route::delete('/users/{id}', [UserController::class, 'remove']);
+    Route::patch('/users/{id}', [UserController::class, 'update']);
 
     Route::get('/jobs', [JobController::class, 'index']);
     Route::post('/jobs', [JobController::class, 'store']);
@@ -121,6 +122,7 @@ Route::middleware('auth:sanctum')->group(function () {
     Route::post('/candidates/import/preview', [CandidateImportController::class, 'preview']);
     Route::post('/candidates/import/confirm', [CandidateImportController::class, 'confirm']);
     Route::get('/candidates/{id}', [CandidateController::class, 'show']);
+    Route::patch('/candidates/{id}', [CandidateController::class, 'update']);
     Route::patch('/candidates/{id}/archive', [CandidateController::class, 'archive']);
     Route::patch('/candidates/{id}/restore', [CandidateController::class, 'restore']);
     Route::delete('/candidates/{id}', [CandidateController::class, 'destroy']);
@@ -206,7 +208,7 @@ Route::middleware('auth:sanctum')->group(function () {
 });
 
 // Public — no access token needed, the refresh token itself is the credential
-Route::post('/refresh-token', [LoginController::class, 'refresh']);
+Route::post('/refresh-token', [LoginController::class, 'refresh'])->middleware('throttle:30,1');
 
 // ============================================================
 // SUPER ADMIN — PRD Section 76-85, 145. Completely separate auth

@@ -12,6 +12,23 @@ class SignupRequest extends FormRequest
         return true; // public endpoint — anyone can sign up
     }
 
+    /**
+     * Owners type "acme.com" as often as "https://acme.com" (signup accepts both), so a bare domain
+     * must not make saving the company settings fail. Add https:// when there is no scheme.
+     */
+    protected function prepareForValidation(): void
+    {
+        $website = $this->input('company_website');
+
+        if (is_string($website)) {
+            $website = trim($website);
+            if ($website !== '' && !preg_match('#^[a-z][a-z0-9+.-]*://#i', $website)) {
+                $website = 'https://'.ltrim($website, '/');
+            }
+            $this->merge(['company_website' => $website]);
+        }
+    }
+
     public function rules(): array
     {
         return [

@@ -2,6 +2,7 @@
 
 namespace App\Policies;
 
+use App\Models\Application;
 use App\Models\Candidate;
 use App\Models\User;
 use App\Support\Roles;
@@ -30,7 +31,7 @@ class CandidatePolicy
             return true;
         }
 
-        return $candidate->assigned_user_id === $user->id;
+        return $this->recruiterHasAccess($user, $candidate);
     }
 
     public function create(User $user): bool
@@ -53,7 +54,7 @@ class CandidatePolicy
             return true;
         }
 
-        return $candidate->assigned_user_id === $user->id;
+        return $this->recruiterHasAccess($user, $candidate);
     }
 
     public function delete(User $user, Candidate $candidate): bool
@@ -70,5 +71,21 @@ class CandidatePolicy
     public function assign(User $user, Candidate $candidate): bool
     {
         return $this->delete($user, $candidate); // same rule — Owner/HM only
+    }
+
+    /**
+     * PRD Sections 7, 96 — a Recruiter works on candidates assigned to them AND on candidates of jobs
+     * assigned to them. (Same rule as Candidate::scopeVisibleTo(), for a single record.)
+     */
+    protected function recruiterHasAccess(User $user, Candidate $candidate): bool
+    {
+        if ($candidate->assigned_user_id === $user->id) {
+            return true;
+        }
+
+        return Application::on($candidate->getConnectionName())
+            ->where('candidate_id', $candidate->id)
+            ->whereHas('job', fn ($j) => $j->where('assigned_user_id', $user->id))
+            ->exists();
     }
 }

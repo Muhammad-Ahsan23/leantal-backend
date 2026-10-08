@@ -11,11 +11,28 @@ class UpdateCompanyRequest extends FormRequest
         return true; // checked in controller via CompanyPolicy
     }
 
+    /**
+     * Owners type "acme.com" as often as "https://acme.com" (signup accepts both), so a bare domain
+     * must not make saving the company settings fail. Add https:// when there is no scheme.
+     */
+    protected function prepareForValidation(): void
+    {
+        $website = $this->input('website');
+
+        if (is_string($website)) {
+            $website = trim($website);
+            if ($website !== '' && !preg_match('#^[a-z][a-z0-9+.-]*://#i', $website)) {
+                $website = 'https://'.ltrim($website, '/');
+            }
+            $this->merge(['website' => $website]);
+        }
+    }
+
     public function rules(): array
     {
         return [
             'name' => ['sometimes', 'required', 'string', 'max:255'],
-            'website' => ['sometimes', 'required', 'url', 'max:255'],
+            'website' => ['sometimes', 'required', 'url:http,https', 'max:255'],
             'location' => ['sometimes', 'required', 'string', 'max:255'],
             // PRD Section 68 — "Company (Owner only): Company name,
             // website, location, careers slug." Slug IS editable

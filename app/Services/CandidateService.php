@@ -215,6 +215,38 @@ class CandidateService
         return $candidate->fresh();
     }
 
+    /**
+     * PRD Section 7 / 72 — edit the profile fields of Section 35. The activity entry lists WHICH fields
+     * changed (not their old/new values, so personal data is not copied into the log — Section 72).
+     * Section 36: an empty string means "cleared", stored as NULL.
+     */
+    public function updateProfile(Candidate $candidate, array $data, User $actor, string $connection): Candidate
+    {
+        $clean = [];
+        foreach ($data as $field => $value) {
+            $value = is_string($value) ? trim($value) : $value;
+            $clean[$field] = ($value === '' && $field !== 'name') ? null : $value;
+        }
+
+        $candidate->fill($clean);
+        $changed = array_keys($candidate->getDirty());
+
+        if ($changed === []) {
+            return $candidate; // nothing really changed — no write, no activity noise
+        }
+
+        $candidate->save();
+
+        $this->logActivity($connection, $candidate->company_id, $actor->id, 'candidate.updated', 'candidate', $candidate->id, [
+            'candidate_name' => $candidate->name,
+            'fields' => $changed,
+        ]);
+
+        $this->forgetCandidatesCache($candidate->company_id);
+
+        return $candidate->fresh();
+    }
+
     public function archive(Candidate $candidate, User $actor, string $connection): Candidate
     {
         $candidate->update(['status' => 'archived', 'archived_at' => now()]);

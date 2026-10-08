@@ -5,51 +5,137 @@ namespace App\Http\Controllers\Api;
 use App\Http\Controllers\Controller;
 use App\Http\Requests\Candidates\AssignCandidateRequest;
 use App\Http\Requests\Candidates\CreateCandidateRequest;
+use App\Http\Requests\Candidates\UpdateCandidateRequest;
 use App\Http\Requests\Candidates\CreateNoteRequest;
 use App\Models\Candidate;
 use App\Models\Job;
 use App\Models\Note;
 use App\Models\User;
 use App\Services\CandidateService;
+use App\Support\Roles;
 use App\Support\CacheVersion;
 use Illuminate\Http\Request;
 use Illuminate\Support\Facades\Cache;
 use Illuminate\Support\Facades\DB;
+use Illuminate\Support\Str;
 
 class CandidateController extends Controller
 {
     public function __construct(protected CandidateService $candidates) {}
 
     /**
-     * Same Redis caching pattern as JobController::index() — 60s TTL,
-     * tag-based per-company invalidation. Kept intentionally OUT of the
-     * Kanban board endpoint (ApplicationController::index()) though —
-     * that data needs to be live for multi-recruiter collaboration
-     * (Section 30), while this plain candidate list tolerates a
-     * 60-second staleness window fine.
+     * PRD Sections 21/37/99/143/155 — the Candidates list.
+     *
+     * Each candidate comes with ALL their applications (job + pipeline stage), because one person can
+     * apply to several jobs (Section 32). For screens that want a single line, the most relevant
+     * application is also flattened onto the candidate as job_id / job / stage / applied_at: the one
+     * matching the Job/Stage filter when one is chosen, otherwise the most recent.
+     *
+     * Query parameters:
+     *   search           name, email or phone (Section 99)
+     *   status           active (default) | archived | all   — the ONLY two candidate statuses (Section 37)
+     *   stage            pipeline stage name (hiring progress lives on the application, not the candidate)
+     *   job_id           (Owner/HM only) candidates with an application for this job
+     *   assigned_user_id (Owner/HM only) a user's id, or "unassigned"
+     *
+     * Job and Person filters are Owner/HM-only (Sections 7, 8, 155: "Recruiters do not get company-wide
+     * people/job dropdown filters") — for a Recruiter they are ignored here, not just hidden in the UI
+     * (Section 144). What a Recruiter can see at all is decided by Candidate::scopeVisibleTo().
+     *
+     * Deliberately NOT cached: a candidate's stage changes on every Kanban drag, and a 60-second-old
+     * stage in this list would look like a bug (Section 30: several people work at the same time).
      */
     public function index(Request $request)
     {
+        $request->validate([
+            'search' => ['nullable', 'string', 'max:100'],
+            'status' => ['nullable', 'in:active,archived,all'],
+            'stage' => ['nullable', 'string', 'max:100'],
+            'job_id' => ['nullable', 'uuid'],
+            'assigned_user_id' => ['nullable', 'string', 'max:64'],
+        ]);
+
         $user = $request->user();
         $connection = $user->getConnectionName();
-        $search = $request->query('search');
-        $version = CacheVersion::get("company:{$user->company_id}:candidates");
-        $cacheKey = "candidates:v{$version}:".$user->id.':'.md5($search ?? '');
+        $isManager = in_array($user->role, Roles::MANAGEMENT, true);
 
-        $candidates = Cache::remember($cacheKey, 60, function () use ($user, $connection, $search) {
-            $query = Candidate::on($connection)->visibleTo($user)->with('assignedUser:id,name');
+        $search = trim((string) $request->query('search', ''));
+        $status = $request->query('status', 'active');
+        $stage = trim((string) $request->query('stage', ''));
+        $jobId = $isManager ? $request->query('job_id') : null;
+        $assignedTo = $isManager ? $request->query('assigned_user_id') : null;
 
-            if ($search) {
-                $query->where(function ($q) use ($search) {
-                    $q->where('name', 'ilike', "%{$search}%")
-                      ->orWhere('email', 'ilike', "%{$search}%");
-                });
-            }
+        if ($assignedTo && $assignedTo !== 'unassigned' && !Str::isUuid($assignedTo)) {
+            return response()->json(['message' => 'The selected person is not valid.'], 422);
+        }
 
-            return $query->orderByDesc('created_at')->get();
-        });
+        $query = Candidate::on($connection)
+            ->visibleTo($user)
+            ->with([
+                'assignedUser:id,name',
+                'applications' => fn ($q) => $q->orderByDesc('applied_at'),
+                'applications.job:id,title',
+                'applications.stage:id,name',
+            ]);
+
+        if ($status !== 'all') {
+            $query->where(function ($q) use ($status) {
+                $q->where('status', $status);
+                if ($status === 'active') {
+                    $q->orWhereNull('status'); // a record with no status yet is an active one
+                }
+            });
+        }
+
+        if ($search !== '') {
+            $like = '%'.$this->escapeLike($search).'%';
+            $query->where(function ($q) use ($like) {
+                $q->where('name', 'ilike', $like)
+                  ->orWhere('email', 'ilike', $like)
+                  ->orWhere('phone', 'ilike', $like);
+            });
+        }
+
+        if ($jobId || $stage !== '') {
+            // ONE application must satisfy both (job AND stage), not one each.
+            $query->whereHas('applications', function ($q) use ($jobId, $stage) {
+                if ($jobId) {
+                    $q->where('job_id', $jobId);
+                }
+                if ($stage !== '') {
+                    $q->whereHas('stage', fn ($s) => $s->where('name', 'ilike', $this->escapeLike($stage)));
+                }
+            });
+        }
+
+        if ($assignedTo === 'unassigned') {
+            $query->whereNull('assigned_user_id');
+        } elseif ($assignedTo) {
+            $query->where('assigned_user_id', $assignedTo);
+        }
+
+        $candidates = $query->orderByDesc('created_at')->get()->map(function (Candidate $c) use ($jobId, $stage) {
+            $primary = $c->applications->first(function ($a) use ($jobId, $stage) {
+                return (!$jobId || $a->job_id === $jobId)
+                    && ($stage === '' || strcasecmp((string) $a->stage?->name, $stage) === 0);
+            }) ?? $c->applications->first();
+
+            $c->setAttribute('job_id', $primary?->job_id);
+            $c->setAttribute('job', $primary?->job);
+            $c->setAttribute('stage', $primary?->stage);
+            $c->setAttribute('applied_at', $primary?->applied_at);
+            $c->setAttribute('application_count', $c->applications->count());
+
+            return $c;
+        })->values();
 
         return response()->json(['candidates' => $candidates]);
+    }
+
+    /** Makes %, _ and \ in what the user typed match literally inside LIKE/ILIKE. */
+    protected function escapeLike(string $value): string
+    {
+        return str_replace(['\\', '%', '_'], ['\\\\', '\\%', '\\_'], $value);
     }
 
     public function show(Request $request, string $id)
@@ -117,6 +203,30 @@ class CandidateController extends Controller
     /**
      * PRD Section 37 — reversible archive. Owner/HM only (CandidatePolicy).
      */
+    /**
+     * PRD Section 7 ("Edit permitted candidate information") and Section 72 (GDPR correction).
+     * Owner / Hiring Manager: any candidate. Recruiter: only candidates they can access
+     * (CandidatePolicy::update). An archived candidate can still be corrected.
+     */
+    public function update(UpdateCandidateRequest $request, string $id)
+    {
+        $user = $request->user();
+        $connection = $user->getConnectionName();
+        $candidate = Candidate::on($connection)->find($id);
+
+        if (!$candidate) {
+            return response()->json(['message' => 'Candidate not found.'], 404);
+        }
+
+        if (!$user->can('update', $candidate)) {
+            return response()->json(['message' => 'You do not have permission to edit this candidate.'], 403);
+        }
+
+        $candidate = $this->candidates->updateProfile($candidate, $request->validated(), $user, $connection);
+
+        return response()->json(['candidate' => $candidate]);
+    }
+
     /**
      * Reverse of archive(). Same rule as archiving (PRD permissions table: Owner Yes, Hiring Manager
      * Yes, Recruiter No) — whoever may archive a candidate may bring them back.

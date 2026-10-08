@@ -41,8 +41,11 @@ class Candidate extends Model
     }
 
     /**
-     * PRD Section 142 — Recruiters are restricted to their assigned
-     * candidates only; Owner/HM see every candidate in the company.
+     * PRD Sections 7, 96, 142 — Owner/HM see every candidate in the company. A Recruiter sees:
+     *   - candidates assigned to them, AND
+     *   - candidates who applied to a job assigned to them ("Candidates belonging to jobs assigned to
+     *     them"; an assigned Recruiter "gains access to the job, its candidate pipeline").
+     * Nothing else: another Recruiter's candidates stay invisible.
      */
     public function scopeVisibleTo(Builder $query, User $user): Builder
     {
@@ -51,6 +54,11 @@ class Candidate extends Model
         }
 
         return $query->where('company_id', $user->company_id)
-            ->where('assigned_user_id', $user->id);
+            ->where(function (Builder $q) use ($user) {
+                $q->where('assigned_user_id', $user->id)
+                  ->orWhereHas('applications', function ($a) use ($user) {
+                      $a->whereHas('job', fn ($j) => $j->where('assigned_user_id', $user->id));
+                  });
+            });
     }
 }

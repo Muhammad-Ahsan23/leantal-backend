@@ -34,6 +34,22 @@ class RegionRoutingRepository
     }
 
     /**
+     * Signup-only: claims an email for a company ONLY if nobody has it yet, and says whether it won.
+     * recordUserEmail() above is updateOrInsert(), which silently re-points an existing email to a
+     * different company — fine for an invite, but at signup that would let a new company steal
+     * (and lock out) an account that already exists. email is the primary key, so this is atomic.
+     */
+    public function claimUserEmail(string $email, string $companyId, string $region): bool
+    {
+        return DB::connection('routing_db')->table('user_email_region_lookup')->insertOrIgnore([
+            'email' => strtolower(trim($email)),
+            'company_id' => $companyId,
+            'region' => $region,
+            'updated_at' => now(),
+        ]) === 1;
+    }
+
+    /**
      * Login (PRD Section 15) only collects email + password — no company
      * selector — so this is how the system finds which regional database
      * to check credentials against, before it knows anything else.

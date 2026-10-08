@@ -8,7 +8,9 @@ use App\Http\Requests\Auth\ResetPasswordRequest;
 use App\Models\User;
 use App\Services\PasswordResetService;
 use App\Services\RegionResolver;
+use App\Services\RefreshTokenService;
 use App\Services\RegionRoutingRepository;
+use App\Support\FrontendUrl;
 use Illuminate\Support\Facades\Hash;
 use Illuminate\Support\Facades\Log;
 use Illuminate\Support\Facades\Mail;
@@ -19,6 +21,7 @@ class PasswordResetController extends Controller
     public function __construct(
         protected RegionRoutingRepository $routing,
         protected PasswordResetService $resetService,
+        protected RefreshTokenService $refreshTokens,
     ) {}
 
     /**
@@ -44,16 +47,21 @@ class PasswordResetController extends Controller
             $user = User::on($connection)->where('email', $email)->where('status', 'active')->first();
 
             if ($user) {
-                $token = $this->resetService->generate($user, $connection);
+                // PRD Section 15: the link must open the real app (FRONTEND_URL). If the link cannot be built or
+                // the email cannot be sent, the failure is logged and the response stays the same generic one
+                // (no account-existence leak).
+                try {
+                    $token = $this->resetService->generate($user, $connection);
+                    $resetUrl = FrontendUrl::to('/reset-password', ['email' => $email, 'token' => $token]);
 
-                // TODO: point this at the real frontend URL once the domain
-                // is live — app.leantal.com per PRD Section 15 opening line.
-                $resetUrl = config('app.frontend_url', 'http://localhost:5173')
-                    ."/reset-password?email={$email}&token={$token}";
+                    Mail::raw("Click the link below to reset your LeanTal password:\n\n{$resetUrl}\n\nThis link expires in 60 minutes. If you didn't request this, you can safely ignore this email.", function ($message) use ($email) {
+                        $message->to($email)->subject('Reset your LeanTal password');
+                    });
+                } catch (\Throwable $e) {
+                    Log::error('Password reset email could not be sent', ['email' => $email, 'error' => $e->getMessage()]);
 
-                Mail::raw("Click the link below to reset your LeanTal password:\n\n{$resetUrl}\n\nThis link expires in 60 minutes. If you didn't request this, you can safely ignore this email.", function ($message) use ($email) {
-                    $message->to($email)->subject('Reset your LeanTal password');
-                });
+                    return $this->genericResponse();
+                }
 
                 Log::info('Password reset requested', ['email' => $email]); // Section 15: "Log security events"
             }
@@ -94,6 +102,7 @@ class PasswordResetController extends Controller
         // Logout from all devices — Section 15 requires this immediately
         // after a password change.
         $user->tokens()->delete();
+        $this->refreshTokens->revokeAllForUser($connection, $user->id); // the 30-day sessions too
 
         Log::info('Password reset completed', ['email' => $email]);
 

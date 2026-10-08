@@ -19,6 +19,12 @@ class PasswordResetService
     {
         $token = Str::random(64);
 
+        // Only the NEWEST link may work: asking for a new one kills every older link that is still unused.
+        DB::connection($connection)->table('password_reset_tokens')
+            ->where('user_id', $user->id)
+            ->whereNull('used_at')
+            ->update(['used_at' => now()]);
+
         DB::connection($connection)->table('password_reset_tokens')->insert([
             'id' => (string) Str::uuid(),
             'user_id' => $user->id,
@@ -48,8 +54,11 @@ class PasswordResetService
             return false;
         }
 
+        // One use only, and it also kills any other unused link of this user. (Marking just this row would
+        // let an OLDER, still-unexpired link work again right after the newer one was used.)
         DB::connection($connection)->table('password_reset_tokens')
-            ->where('id', $reset->id)
+            ->where('user_id', $user->id)
+            ->whereNull('used_at')
             ->update(['used_at' => now()]);
 
         return true;
