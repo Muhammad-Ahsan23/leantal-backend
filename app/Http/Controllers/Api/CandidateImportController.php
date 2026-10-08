@@ -6,6 +6,7 @@ use App\Http\Controllers\Controller;
 use App\Http\Requests\Candidates\ConfirmImportRequest;
 use App\Http\Requests\Candidates\DetectCsvHeadersRequest;
 use App\Http\Requests\Candidates\PreviewImportRequest;
+use App\Models\Candidate;
 use App\Models\Job;
 use App\Services\CandidateImportService;
 
@@ -58,13 +59,20 @@ class CandidateImportController extends Controller
         $connection = $user->getConnectionName();
         $data = $request->validated();
 
-        $job = Job::on($connection)->find($data['job_id']);
-        if (!$job) {
-            return response()->json(['message' => 'Job not found.'], 404);
-        }
+        // The job is optional: without one, candidates are added to the company's candidate list only.
+        $job = null;
+        if (!empty($data['job_id'])) {
+            $job = Job::on($connection)->find($data['job_id']);
+            if (!$job) {
+                return response()->json(['message' => 'Job not found.'], 404);
+            }
 
-        if (!$user->can('update', $job)) {
-            return response()->json(['message' => 'You do not have permission to add candidates to this job.'], 403);
+            if (!$user->can('update', $job)) {
+                return response()->json(['message' => 'You do not have permission to add candidates to this job.'], 403);
+            }
+        } elseif (!$user->can('create', Candidate::class)) {
+            // Same rule as adding a single candidate: all three roles may (PRD Section 41).
+            return response()->json(['message' => 'You do not have permission to add candidates.'], 403);
         }
 
         try {

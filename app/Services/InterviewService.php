@@ -22,6 +22,41 @@ class InterviewService
     ) {}
 
     /**
+     * Refuses to schedule when no meeting link can be created, instead of quietly making an interview
+     * with no link and no invitation for the candidate.
+     *
+     * @throws \RuntimeException with a message that is safe to show the person
+     */
+    public function assertCanCreateMeetingLink(string $provider, User $organizer, User $actor, string $connection): void
+    {
+        if ($provider === 'zoom') {
+            throw new \RuntimeException("Zoom links can't be created automatically yet. Please choose Google Meet.");
+        }
+
+        ['oauth_provider' => $oauthProvider] = $this->resolveProvider($provider);
+        if (!$oauthProvider) {
+            return;
+        }
+
+        $connected = OAuthToken::on($connection)
+            ->where('user_id', $organizer->id)
+            ->where('provider', $oauthProvider)
+            ->whereNull('disconnected_at')
+            ->exists();
+
+        if ($connected) {
+            return;
+        }
+
+        $service = $provider === 'microsoft_teams' ? 'Microsoft' : 'Google';
+        $where = $provider === 'microsoft_teams' ? 'Teams' : 'Meet';
+
+        throw new \RuntimeException($organizer->id === $actor->id
+            ? "Connect your {$service} account first (Settings → Integrations). The {$where} link and the candidate's invitation are created from your calendar."
+            : "{$organizer->name} hasn't connected {$service} yet. Ask them to connect it in Settings → Integrations, or choose an organizer who has.");
+    }
+
+    /**
      * PRD Section 60-61 — schedules an interview AND, when the
      * organizer has connected the matching provider (Google Calendar
      * for 'google_meet', Outlook/Microsoft 365 for 'microsoft_teams'),
@@ -29,11 +64,14 @@ class InterviewService
      * link and emails the candidate a calendar invite (both providers
      * handle that invite email themselves).
      *
-     * DELIBERATE DESIGN — graceful degradation: if the organizer hasn't
-     * connected the relevant provider, or the API call fails for any
-     * reason, the interview is still created successfully with
-     * whatever manual meeting_url was submitted — core scheduling
-     * never fails because an external API had a bad moment.
+     * The meeting link is NEVER typed in by a user (PRD Section 61): it comes from the calendar API.
+     * So the organizer must have the provider connected — assertCanCreateMeetingLink() checks that
+     * BEFORE anything is created, and the controller turns its message into a clear error.
+     *
+     * DELIBERATE DESIGN — graceful degradation: if the API call itself fails after that check (Google
+     * having a bad moment), the interview is still created and the failure is logged for a safe retry
+     * (Section 82) — core scheduling never fails because an external API had a bad moment. The response
+     * then has no meeting_url, which is how the app knows to warn the person.
      */
     public function schedule(array $data, string $companyId, User $actor, string $connection): Interview
     {
@@ -129,7 +167,7 @@ class InterviewService
             ->first();
 
         if (!$token) {
-            return; // organizer hasn't connected this provider — manual meeting_url (if any) stands
+            return; // already refused earlier by assertCanCreateMeetingLink(); only a retry can get here
         }
 
         $candidate = Candidate::on($connection)->find($data['candidate_id']);
@@ -149,7 +187,7 @@ class InterviewService
                 'meeting_url' => $result['meeting_url'] ?? $interview->meeting_url,
             ]);
         } catch (\RuntimeException $e) {
-            Log::warning("{$provider} calendar sync failed on interview create — falling back to manual meeting_url", [
+            Log::warning("{$provider} calendar sync failed on interview create — interview kept without a link", [
                 'interview_id' => $interview->id,
                 'message' => $e->getMessage(),
             ]);

@@ -85,6 +85,17 @@ class CandidateController extends Controller
         $connection = $user->getConnectionName();
         $data = $request->validated();
 
+        // No job chosen: only add the candidate (see CreateCandidateRequest). They have no application yet.
+        if (empty($data['job_id'])) {
+            try {
+                $candidate = $this->candidates->createWithoutJob($data, $user, $connection, $request->file('resume'));
+            } catch (\RuntimeException $e) {
+                return response()->json(['message' => $e->getMessage()], 422);
+            }
+
+            return response()->json(['candidate' => $candidate, 'application' => null], 201);
+        }
+
         $job = Job::on($connection)->where('company_id', $user->company_id)->find($data['job_id']);
 
         if (!$job) {

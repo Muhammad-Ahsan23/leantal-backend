@@ -31,6 +31,68 @@ class CandidateService
      *
      * @throws \RuntimeException if the candidate already has an active application to this job
      */
+    /**
+     * Adds a candidate WITHOUT putting them in any job (PRD Section 32: candidate and application are
+     * separate things; Section 41 manual add needs only basic information). Same fields and defaults as a
+     * new candidate in addToJob(), minus the application.
+     *
+     * An email that already belongs to a candidate of this company is refused (Sections 43/133: detect
+     * duplicate candidates, identity = normalized email). Unlike addToJob() there is nothing to attach
+     * to an existing person here, so quietly returning them would hide that the add did nothing.
+     *
+     * @throws \RuntimeException with a user-safe message when the email is already taken
+     */
+    public function createWithoutJob(array $data, User $actor, string $connection, ?UploadedFile $resume = null): Candidate
+    {
+        $normalizedEmail = strtolower(trim($data['email']));
+        $duplicate = 'A candidate with this email already exists.';
+
+        // Checked BEFORE storing the resume, so a refused add never leaves an orphan file behind.
+        $exists = Candidate::on($connection)
+            ->where('company_id', $actor->company_id)
+            ->where('normalized_email', $normalizedEmail)
+            ->exists();
+
+        if ($exists) {
+            throw new \RuntimeException($duplicate);
+        }
+
+        $resumeMeta = $this->resumeStorage->store($resume, RegionResolver::regionForConnection($connection));
+
+        try {
+            $candidate = DB::connection($connection)->transaction(function () use ($data, $actor, $connection, $normalizedEmail, $resumeMeta) {
+                $candidate = Candidate::on($connection)->create([
+                    'company_id' => $actor->company_id,
+                    'name' => $data['name'],
+                    'email' => $data['email'],
+                    'normalized_email' => $normalizedEmail,
+                    'phone' => $data['phone'] ?? null,
+                    'location' => $data['location'] ?? null,
+                    'current_title' => $data['current_title'] ?? null,
+                    'current_company' => $data['current_company'] ?? null,
+                    'linkedin_url' => $data['linkedin_url'] ?? null,
+                    // Same default as addToJob(): whoever adds the candidate owns them until reassigned.
+                    'assigned_user_id' => $actor->id,
+                    'status' => 'active',
+                    ...($resumeMeta ?? []),
+                ]);
+
+                $this->logActivity($connection, $actor->company_id, $actor->id, 'candidate.created', 'candidate', $candidate->id, [
+                    'candidate_name' => $candidate->name,
+                ]);
+
+                return $candidate;
+            });
+        } catch (\Illuminate\Database\UniqueConstraintViolationException $e) {
+            // Two people adding the same email at the same moment: the database's unique index wins.
+            throw new \RuntimeException($duplicate);
+        }
+
+        $this->forgetCandidatesCache($actor->company_id);
+
+        return $candidate;
+    }
+
     public function addToJob(array $data, Job $job, User $actor, string $connection, ?UploadedFile $resume = null): array
     {
         $normalizedEmail = strtolower(trim($data['email']));

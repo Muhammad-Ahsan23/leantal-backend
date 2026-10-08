@@ -141,7 +141,7 @@ class CandidateImportService
      * @return array{created: int, skipped_duplicates: int, errors: array}
      * @throws \RuntimeException if the batch has expired or doesn't exist
      */
-    public function confirm(string $batchId, Job $job, User $actor, string $connection): array
+    public function confirm(string $batchId, ?Job $job, User $actor, string $connection): array
     {
         $validRows = Cache::get("candidate_import_batch:{$batchId}");
 
@@ -154,20 +154,27 @@ class CandidateImportService
         $errors = [];
 
         foreach ($validRows as $row) {
+            $data = [
+                'name' => trim(($row['first_name'] ?? '').' '.($row['last_name'] ?? '')),
+                'email' => $row['email'],
+                'phone' => $row['phone'] ?? null,
+                'current_title' => $row['current_title'] ?? null,
+                'current_company' => $row['current_company'] ?? null,
+                'linkedin_url' => $row['linkedin_url'] ?? null,
+            ];
+
             try {
-                $this->candidates->addToJob([
-                    'name' => trim(($row['first_name'] ?? '').' '.($row['last_name'] ?? '')),
-                    'email' => $row['email'],
-                    'phone' => $row['phone'] ?? null,
-                    'current_title' => $row['current_title'] ?? null,
-                    'current_company' => $row['current_company'] ?? null,
-                    'linkedin_url' => $row['linkedin_url'] ?? null,
-                ], $job, $actor, $connection);
+                if ($job) {
+                    $this->candidates->addToJob($data, $job, $actor, $connection);
+                } else {
+                    // No job chosen: candidate only (PRD Section 32). An email that already exists in
+                    // this company is skipped and reported, same as a duplicate application below.
+                    $this->candidates->createWithoutJob($data, $actor, $connection);
+                }
                 $created++;
             } catch (\RuntimeException $e) {
-                // "This candidate already has an active application for
-                // this job" — addToJob()'s own duplicate-application
-                // guard (PRD Section 135) firing mid-import.
+                // With a job: "already has an active application for this job" (PRD Section 135).
+                // Without one: "A candidate with this email already exists." (Sections 43/133).
                 $skipped++;
                 $errors[] = ['email' => $row['email'], 'reason' => $e->getMessage()];
             }

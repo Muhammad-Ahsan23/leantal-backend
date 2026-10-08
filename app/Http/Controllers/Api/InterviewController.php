@@ -94,6 +94,13 @@ class InterviewController extends Controller
             return response()->json(['message' => 'That organizer was not found in your company.'], 422);
         }
 
+        // The link is created from the organizer's calendar, so refuse up front when that is impossible.
+        try {
+            $this->interviews->assertCanCreateMeetingLink($data['provider'], $organizer, $user, $connection);
+        } catch (\RuntimeException $e) {
+            return response()->json(['message' => $e->getMessage()], 422);
+        }
+
         $interview = $this->interviews->schedule($data, $user->company_id, $user, $connection);
 
         return response()->json(['interview' => $interview->load(['candidate:id,name', 'job:id,title', 'organizer:id,name'])], 201);

@@ -14,7 +14,11 @@ class CreateCandidateRequest extends FormRequest
     public function rules(): array
     {
         return [
-            'job_id' => ['required', 'uuid'],
+            // OPTIONAL: a candidate can be added on their own (PRD Section 32 — a candidate is a person,
+            // an application is that person's application to ONE job). With a job_id they also get an
+            // application in that job's Applied stage; without one they are only added to the candidate list
+            // and can be put into a job later ("Add to a job" on their profile).
+            'job_id' => ['nullable', 'uuid'],
             'name' => ['required', 'string', 'max:255'],
             'email' => ['required', 'email', 'max:255'],
             'phone' => ['nullable', 'string', 'max:50'],

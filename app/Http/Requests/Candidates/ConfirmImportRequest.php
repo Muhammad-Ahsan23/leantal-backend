@@ -12,7 +12,8 @@ class ConfirmImportRequest extends FormRequest
     {
         return [
             'batch_id' => ['required', 'uuid'],
-            'job_id' => ['required', 'uuid'],
+            // Optional (PRD Section 32: a candidate exists without any job). Omitted = add candidates only.
+            'job_id' => ['nullable', 'uuid'],
         ];
     }
 }

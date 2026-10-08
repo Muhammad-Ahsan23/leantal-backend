@@ -16,7 +16,6 @@ class UpdateInterviewRequest extends FormRequest
         return [
             'interview_type' => ['sometimes', 'nullable', 'string', 'max:255'],
             'provider' => ['sometimes', 'required', 'in:google_meet,microsoft_teams,zoom'],
-            'meeting_url' => ['sometimes', 'nullable', 'url', 'max:500'],
             'start_time' => ['sometimes', 'required', 'date'],
             'end_time' => ['sometimes', 'required', 'date', 'after:start_time'],
         ];
