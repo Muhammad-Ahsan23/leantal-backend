@@ -83,6 +83,11 @@ class ApplicationService
                 'metadata' => json_encode([
                     'from_stage' => $oldStage?->name,
                     'to_stage' => $newStage->name,
+                    // PRD Section 65 — "Rahul moved John Doe from Screening to Interview" needs the names
+                    'candidate_id' => $application->candidate_id,
+                    'candidate_name' => DB::connection($connection)->table('candidates')->where('id', $application->candidate_id)->value('name'),
+                    'job_id' => $application->job_id,
+                    'job_title' => DB::connection($connection)->table('jobs')->where('id', $application->job_id)->value('title'),
                 ]),
                 'created_at' => now(),
             ]);

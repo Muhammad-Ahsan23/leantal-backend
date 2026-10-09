@@ -2,7 +2,9 @@
 
 namespace App\Http\Requests\Auth;
 
+use App\Support\Countries;
 use Illuminate\Foundation\Http\FormRequest;
+use Illuminate\Validation\Rule;
 use Illuminate\Validation\Validator;
 
 class SignupRequest extends FormRequest
@@ -18,6 +20,10 @@ class SignupRequest extends FormRequest
      */
     protected function prepareForValidation(): void
     {
+        if (is_string($this->input('country_code'))) {
+            $this->merge(['country_code' => strtoupper(trim($this->input('country_code')))]);
+        }
+
         $website = $this->input('company_website');
 
         if (is_string($website)) {
@@ -45,7 +51,9 @@ class SignupRequest extends FormRequest
             // display value, country_code is what the region resolver
             // actually needs (matches the country dropdown in the frontend).
             'location' => ['required', 'string', 'max:255'],
-            'country_code' => ['required', 'string', 'size:2'],
+            // Must be a real ISO country: it decides the data region (PRD Section 73), so a made-up code
+            // must not silently fall through to the US database.
+            'country_code' => ['required', 'string', 'size:2', Rule::in(Countries::codes())],
             'captcha_token' => ['required', 'string'],
         ];
     }

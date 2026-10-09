@@ -8,6 +8,7 @@ use App\Services\GmailWatchService;
 use App\Services\GoogleCalendarOAuthService;
 use App\Services\MicrosoftOAuthService;
 use App\Services\MicrosoftSubscriptionService;
+use App\Support\ActivityLogger;
 use Illuminate\Http\Request;
 use Illuminate\Support\Facades\Cache;
 use Illuminate\Support\Facades\Log;
@@ -57,25 +58,25 @@ class OAuthConnectController extends Controller
 
         if ($error) {
             Log::info('Google OAuth: user denied or cancelled', ['error' => $error]);
-            return redirect("{$frontendUrl}/settings/integrations?connected=false&reason=denied");
+            return redirect("{$frontendUrl}/settings?tab=integrations&connected=false&reason=denied");
         }
 
         if (!$code || !$state) {
-            return redirect("{$frontendUrl}/settings/integrations?connected=false&reason=malformed");
+            return redirect("{$frontendUrl}/settings?tab=integrations&connected=false&reason=malformed");
         }
 
         $stateData = Cache::pull("oauth_state:{$state}"); // pull = get + forget, single-use
 
         if (!$stateData) {
             Log::warning('Google OAuth callback: unknown or expired state', ['state' => $state]);
-            return redirect("{$frontendUrl}/settings/integrations?connected=false&reason=expired");
+            return redirect("{$frontendUrl}/settings?tab=integrations&connected=false&reason=expired");
         }
 
         try {
             $tokens = $this->google->exchangeCodeForTokens($code);
         } catch (\RuntimeException $e) {
             Log::error('Google OAuth token exchange failed', ['message' => $e->getMessage()]);
-            return redirect("{$frontendUrl}/settings/integrations?connected=false&reason=exchange_failed");
+            return redirect("{$frontendUrl}/settings?tab=integrations&connected=false&reason=exchange_failed");
         }
 
         $connection = $stateData['connection'];
@@ -106,7 +107,17 @@ class OAuthConnectController extends Controller
             Log::warning('Gmail watch registration failed on connect', ['message' => $e->getMessage()]);
         }
 
-        return redirect("{$frontendUrl}/settings/integrations?connected=true&provider=google");
+        // PRD Section 65 — "Emily connected Gmail"
+        $connectedUser = \App\Models\User::on($connection)->find($stateData['user_id']);
+        if ($connectedUser) {
+            ActivityLogger::log($connection, $connectedUser->company_id, $connectedUser->id, 'integration.connected', 'integration', (string) ($token->id ?? $connectedUser->id), [
+                'provider' => 'google',
+                'provider_label' => 'Gmail',
+                'provider_email' => $providerEmail,
+            ]);
+        }
+
+        return redirect("{$frontendUrl}/settings?tab=integrations&connected=true&provider=google");
     }
 
     /**
@@ -135,25 +146,25 @@ class OAuthConnectController extends Controller
 
         if ($error) {
             Log::info('Microsoft OAuth: user denied or cancelled', ['error' => $error]);
-            return redirect("{$frontendUrl}/settings/integrations?connected=false&reason=denied");
+            return redirect("{$frontendUrl}/settings?tab=integrations&connected=false&reason=denied");
         }
 
         if (!$code || !$state) {
-            return redirect("{$frontendUrl}/settings/integrations?connected=false&reason=malformed");
+            return redirect("{$frontendUrl}/settings?tab=integrations&connected=false&reason=malformed");
         }
 
         $stateData = Cache::pull("oauth_state:{$state}");
 
         if (!$stateData) {
             Log::warning('Microsoft OAuth callback: unknown or expired state', ['state' => $state]);
-            return redirect("{$frontendUrl}/settings/integrations?connected=false&reason=expired");
+            return redirect("{$frontendUrl}/settings?tab=integrations&connected=false&reason=expired");
         }
 
         try {
             $tokens = $this->microsoft->exchangeCodeForTokens($code);
         } catch (\RuntimeException $e) {
             Log::error('Microsoft OAuth token exchange failed', ['message' => $e->getMessage()]);
-            return redirect("{$frontendUrl}/settings/integrations?connected=false&reason=exchange_failed");
+            return redirect("{$frontendUrl}/settings?tab=integrations&connected=false&reason=exchange_failed");
         }
 
         $connection = $stateData['connection'];
@@ -184,6 +195,16 @@ class OAuthConnectController extends Controller
             Log::warning('Microsoft subscription registration failed on connect', ['message' => $e->getMessage()]);
         }
 
-        return redirect("{$frontendUrl}/settings/integrations?connected=true&provider=microsoft");
+        // PRD Section 65 — "Emily connected Gmail"
+        $connectedUser = \App\Models\User::on($connection)->find($stateData['user_id']);
+        if ($connectedUser) {
+            ActivityLogger::log($connection, $connectedUser->company_id, $connectedUser->id, 'integration.connected', 'integration', (string) ($token->id ?? $connectedUser->id), [
+                'provider' => 'microsoft',
+                'provider_label' => 'Outlook',
+                'provider_email' => $providerEmail,
+            ]);
+        }
+
+        return redirect("{$frontendUrl}/settings?tab=integrations&connected=true&provider=microsoft");
     }
 }

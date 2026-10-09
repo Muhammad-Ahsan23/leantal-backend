@@ -51,13 +51,61 @@ class PublicCareersController extends Controller
         if ($employmentType = $request->query('employment_type')) {
             $query->where('employment_type', $employmentType);
         }
-        if ($search = $request->query('search')) {
-            $query->where('title', 'ilike', "%{$search}%");
+        if ($location = trim((string) $request->query('location', ''))) {
+            // PRD Section 46 — Location is free text ("Bengaluru, India", "London, UK").
+            $query->where('location', 'ilike', '%'.$this->escapeLike($location).'%');
+        }
+        if ($search = trim((string) $request->query('search', ''))) {
+            $like = '%'.$this->escapeLike($search).'%';
+            $query->where(function ($q) use ($like) {
+                $q->where('title', 'ilike', $like)->orWhere('department', 'ilike', $like);
+            });
         }
 
         $jobs = $query->orderByDesc('published_at')->get(self::PUBLIC_JOB_FIELDS);
 
-        return response()->json(['jobs' => $jobs]);
+        // PRD Section 45 — the careers page header: company name, a simple description, and the company
+        // name links to the stored website. Only these three public fields are exposed.
+        $companyRow = DB::connection($connection)->table('companies')
+            ->where('id', $company['company_id'])
+            ->first(['name', 'website', 'careers_description']);
+
+        // PRD Section 46 — the Department filter lists the departments the company created, not just
+        // the ones that happen to have a published job right now.
+        $departments = DB::connection($connection)->table('departments')
+            ->where('company_id', $company['company_id'])
+            ->orderBy('name')
+            ->pluck('name')
+            ->values();
+
+        return response()->json([
+            'jobs' => $jobs,
+            'company' => [
+                'name' => $companyRow->name ?? null,
+                'website' => $this->safeWebsite($companyRow->website ?? null),
+                'description' => $companyRow->careers_description ?? null,
+            ],
+            'departments' => $departments,
+        ]);
+    }
+
+    /** Only http(s) links are ever handed to the public page (never javascript: or similar). */
+    protected function safeWebsite(?string $website): ?string
+    {
+        $website = trim((string) $website);
+        if ($website === '') {
+            return null;
+        }
+        if (!preg_match('#^https?://#i', $website)) {
+            $website = 'https://'.$website;
+        }
+
+        return filter_var($website, FILTER_VALIDATE_URL) ? $website : null;
+    }
+
+    protected function escapeLike(string $value): string
+    {
+        return str_replace(['\\', '%', '_'], ['\\\\', '\\%', '\\_'], $value);
     }
 
     public function showJob(string $companySlug, string $jobId)

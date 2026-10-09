@@ -12,6 +12,7 @@ use App\Models\Job;
 use App\Models\User;
 use App\Services\JobService;
 use App\Services\SocialSharingService;
+use App\Support\ActivityLogger;
 use App\Support\CacheVersion;
 use Illuminate\Http\Request;
 use Illuminate\Support\Facades\Cache;
@@ -93,6 +94,11 @@ class JobController extends Controller
             return response()->json(['message' => $e->getMessage()], 422);
         }
 
+        // PRD Section 65 — "Sarah Johnson published Backend Engineer"
+        ActivityLogger::log($connection, $user->company_id, $user->id, $job->status === 'published' ? 'job.published' : 'job.created', 'job', $job->id, [
+            'job_title' => $job->title,
+        ]);
+
         return response()->json(['job' => $job->load('pipelineStages')], 201);
     }
 
@@ -131,6 +137,8 @@ class JobController extends Controller
 
         $job = $this->jobs->update($job, $request->validated(), $connection);
 
+        ActivityLogger::log($connection, $user->company_id, $user->id, 'job.updated', 'job', $job->id, ['job_title' => $job->title]);
+
         return response()->json(['job' => $job]);
     }
 
@@ -154,10 +162,17 @@ class JobController extends Controller
         }
 
         try {
+            $previousStatus = $job->status;
             $job = $this->jobs->transitionStatus($job, $request->validated()['status'], $connection);
         } catch (\InvalidArgumentException|\RuntimeException $e) {
             return response()->json(['message' => $e->getMessage()], 422);
         }
+
+        // PRD Section 65 — job.published / job.paused / job.closed / job.archived
+        ActivityLogger::log($connection, $user->company_id, $user->id, 'job.'.$job->status, 'job', $job->id, [
+            'job_title' => $job->title,
+            'from_status' => $previousStatus,
+        ]);
 
         return response()->json(['job' => $job]);
     }
@@ -184,6 +199,13 @@ class JobController extends Controller
         }
 
         $job = $this->jobs->assign($job, $targetUserId, $connection);
+
+        // PRD Section 65 — "Sarah Johnson assigned Backend Engineer to Rahul"
+        ActivityLogger::log($connection, $user->company_id, $user->id, 'job.assigned', 'job', $job->id, [
+            'job_title' => $job->title,
+            'assigned_user_id' => $targetUserId,
+            'assigned_user_name' => User::on($connection)->where('id', $targetUserId)->value('name'),
+        ]);
 
         return response()->json(['job' => $job]);
     }

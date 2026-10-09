@@ -229,6 +229,7 @@ Route::prefix('super-admin')->group(function () {
         Route::get('/companies/{companyId}', [SuperAdminCompanyController::class, 'show']);
         Route::post('/companies/{companyId}/suspend', [SuperAdminCompanyController::class, 'suspend']);
         Route::post('/companies/{companyId}/reactivate', [SuperAdminCompanyController::class, 'reactivate']);
+        Route::post('/companies/{companyId}/extend-trial', [SuperAdminCompanyController::class, 'extendTrial']);
         Route::post('/companies/{companyId}/users/{userId}/impersonate', [SuperAdminImpersonationController::class, 'start']);
         Route::get('/audit-log', [SuperAdminAuditController::class, 'index']);
         Route::get('/debugging', [SuperAdminDebuggingController::class, 'index']);
