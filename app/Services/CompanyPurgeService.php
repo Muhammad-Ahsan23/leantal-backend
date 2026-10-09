@@ -117,6 +117,14 @@ class CompanyPurgeService
             ->whereNotNull('resume_path')
             ->get(['resume_disk', 'resume_path']);
 
+        // M19: file-upload answers are stored in the region bucket too, so delete them with the company.
+        $answerFiles = DB::connection($connection)->table('application_answers as aa')
+            ->join('applications as a', 'a.id', '=', 'aa.application_id')
+            ->where('a.company_id', $companyId)
+            ->whereNotNull('aa.answer_file_path')
+            ->get(['aa.answer_file_disk as resume_disk', 'aa.answer_file_path as resume_path']);
+        $files = $files->concat($answerFiles);
+
         // 3. Revoke Google/Microsoft access the members granted (best-effort).
         $this->teardownIntegrations($userIds, $connection, $region);
 
@@ -124,11 +132,11 @@ class CompanyPurgeService
         $this->deleteTenantRows($connection, $companyId);
 
         // 5. Everything below runs AFTER the commit and must never throw.
-        $this->safely($region, 'resume files', fn () => $this->deleteFiles($files));
-        $this->safely($region, 'login tokens', fn () => $this->deleteTokens($userIds));
-        $this->safely($region, 'routing lookups', fn () => $this->cleanRouting($companyId));
-        $this->safely($region, 'billing webhook records', fn () => $this->deleteWebhookRecords($companyId, $creemCustomerId));
-        $this->safely($region, 'admin references', fn () => $this->cleanAdmin($companyId));
+        $this->safely($region, 'resume files', fn() => $this->deleteFiles($files));
+        $this->safely($region, 'login tokens', fn() => $this->deleteTokens($userIds));
+        $this->safely($region, 'routing lookups', fn() => $this->cleanRouting($companyId));
+        $this->safely($region, 'billing webhook records', fn() => $this->deleteWebhookRecords($companyId, $creemCustomerId));
+        $this->safely($region, 'admin references', fn() => $this->cleanAdmin($companyId));
 
         // Minimal platform-level proof that the deletion happened. Deliberately holds
         // only the opaque company id + region — no name, no emails, no personal data.
@@ -156,7 +164,7 @@ class CompanyPurgeService
         if ($company->subscription_status === 'active') {
             throw new \RuntimeException(
                 "We couldn't find the billing subscription for this company, so it can't be cancelled automatically. "
-                .'Please contact support to cancel it first, then delete the company.'
+                    . 'Please contact support to cancel it first, then delete the company.'
             );
         }
     }
@@ -171,7 +179,7 @@ class CompanyPurgeService
 
         foreach ($tokens as $token) {
             if ($token->provider === 'google') {
-                $this->safely($region, 'google watch stop', fn () => $this->gmailWatch->stopWatch($token));
+                $this->safely($region, 'google watch stop', fn() => $this->gmailWatch->stopWatch($token));
                 $this->safely($region, 'google token revoke', function () use ($token) {
                     $raw = $token->refresh_token ?? $token->access_token;
                     if ($raw) {
@@ -199,7 +207,7 @@ class CompanyPurgeService
 
         // Resolved before the transaction so a table that does not exist in a
         // given environment is skipped rather than aborting the whole delete.
-        $steps = array_values(array_filter(self::DELETE_ORDER, fn ($s) => $schema->hasTable($s[0])));
+        $steps = array_values(array_filter(self::DELETE_ORDER, fn($s) => $schema->hasTable($s[0])));
         $counts = [];
 
         $db->transaction(function () use ($db, $steps, $companyId, &$counts) {

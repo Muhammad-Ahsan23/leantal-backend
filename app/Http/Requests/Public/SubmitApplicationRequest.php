@@ -24,7 +24,32 @@ class SubmitApplicationRequest extends FormRequest
             // separately in PublicApplicationService::validateAnswers(),
             // not here (a static rules() array can't express that).
             'answers' => ['nullable', 'array'],
-            'answers.*' => ['nullable', 'string', 'max:5000'],
+            // A text answer is a string; a multiple-choice answer is a list of the chosen options.
+            'answers.*' => ['nullable', function ($attribute, $value, $fail) {
+                if (is_string($value)) {
+                    if (mb_strlen($value) > 5000) {
+                        $fail('This answer is too long.');
+                    }
+                    return;
+                }
+                if (is_array($value)) {
+                    if (count($value) > 50) {
+                        $fail('Too many options selected.');
+                        return;
+                    }
+                    foreach ($value as $item) {
+                        if (!is_string($item) || mb_strlen($item) > 500) {
+                            $fail('Invalid selection.');
+                            return;
+                        }
+                    }
+                    return;
+                }
+                $fail('Invalid answer.');
+            }],
+            // File-upload questions (PRD Sec 28/94): one file per question, keyed by question UUID.
+            'answer_files' => ['nullable', 'array'],
+            'answer_files.*' => ['file', 'mimes:pdf,doc,docx,png,jpg,jpeg', 'max:10240'], // 10MB each
         ];
     }
 }

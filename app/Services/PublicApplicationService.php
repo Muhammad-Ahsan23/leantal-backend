@@ -11,6 +11,7 @@ use App\Models\Job;
 use App\Models\PipelineStage;
 use Illuminate\Http\UploadedFile;
 use Illuminate\Support\Facades\DB;
+use Illuminate\Support\Facades\Storage;
 use Illuminate\Support\Str;
 
 class PublicApplicationService
@@ -18,23 +19,96 @@ class PublicApplicationService
     public function __construct(protected ResumeStorageService $resumeStorage) {}
 
     /**
-     * Checks every REQUIRED question has a submitted answer. Returns a
-     * Laravel-style errors array (empty if valid) — the PRD's per-job
-     * custom questions can't be validated with a static FormRequest
-     * rules() array since which fields are required varies per job.
+     * Validates the submitted answers against the job's own questions (which ones are required, and what
+     * the allowed values are, vary per job — a static FormRequest cannot express that). Returns a
+     * Laravel-style errors array (empty if valid).
+     *
+     * @param array<string, string|array> $answers  question id => text, or list of options (multiple_choice)
+     * @param array<string, \Illuminate\Http\UploadedFile> $files  question id => file (file_upload questions)
      */
-    public function validateAnswers(Job $job, array $answers, string $connection): array
+    public function validateAnswers(Job $job, array $answers, string $connection, array $files = []): array
     {
-        $errors = [];
         $questions = ApplicationQuestion::on($connection)->where('job_id', $job->id)->get();
 
+        return $this->checkAnswers($questions, $answers, $files);
+    }
+
+    /** The rules themselves, kept free of database access so they can be unit-tested with plain objects. */
+    public function checkAnswers(iterable $questions, array $answers, array $files = []): array
+    {
+        $errors = [];
+
         foreach ($questions as $question) {
-            if ($question->required && blank($answers[$question->id] ?? null)) {
-                $errors["answers.{$question->id}"] = ["This field is required."];
+            $key = "answers.{$question->id}";
+
+            if ($question->type === 'file_upload') {
+                if ($question->required && empty($files[$question->id])) {
+                    $errors[$key] = ['Please upload a file.'];
+                }
+                continue;
+            }
+
+            $value = $answers[$question->id] ?? null;
+            $values = $this->asList($value);
+
+            if (empty($values)) {
+                if ($question->required) {
+                    $errors[$key] = ['This field is required.'];
+                }
+                continue;
+            }
+
+            $options = array_map('strval', $question->options ?? []);
+
+            switch ($question->type) {
+                case 'multiple_choice':
+                    foreach ($values as $v) {
+                        if (!in_array($v, $options, true)) {
+                            $errors[$key] = ['Please choose from the listed options.'];
+                            break;
+                        }
+                    }
+                    break;
+                case 'single_choice':
+                    if (count($values) !== 1 || !in_array($values[0], $options, true)) {
+                        $errors[$key] = ['Please choose one of the listed options.'];
+                    }
+                    break;
+                case 'yes_no':
+                    if (count($values) !== 1 || !in_array(strtolower($values[0]), ['yes', 'no'], true)) {
+                        $errors[$key] = ['Please answer Yes or No.'];
+                    }
+                    break;
+                case 'number':
+                    if (count($values) !== 1 || !is_numeric($values[0])) {
+                        $errors[$key] = ['Please enter a number.'];
+                    }
+                    break;
+                case 'date':
+                    $d = count($values) === 1 ? \DateTime::createFromFormat('Y-m-d', $values[0]) : false;
+                    if (!$d || $d->format('Y-m-d') !== $values[0]) {
+                        $errors[$key] = ['Please enter a valid date.'];
+                    }
+                    break;
+                default: // short_text, long_text
+                    if (count($values) !== 1) {
+                        $errors[$key] = ['Invalid answer.'];
+                    }
             }
         }
 
         return $errors;
+    }
+
+    /** A string or a list of strings -> a clean list with blanks removed. */
+    protected function asList(mixed $value): array
+    {
+        $list = is_array($value) ? $value : [$value];
+
+        return array_values(array_filter(
+            array_map(fn ($v) => is_scalar($v) ? trim((string) $v) : '', $list),
+            fn ($v) => $v !== ''
+        ));
     }
 
     /**
@@ -44,12 +118,25 @@ class PublicApplicationService
      *
      * @throws DuplicateApplicationException
      */
-    public function submit(Job $job, array $data, string $connection, ?UploadedFile $resume = null): array
+    public function submit(Job $job, array $data, string $connection, ?UploadedFile $resume = null, array $answerFiles = []): array
     {
         $normalizedEmail = strtolower(trim($data['email']));
-        $resumeMeta = $this->resumeStorage->store($resume, RegionResolver::regionForConnection($connection));
+        $region = RegionResolver::regionForConnection($connection);
+        $resumeMeta = $this->resumeStorage->store($resume, $region);
+        $storedFiles = $this->storeAnswerFiles($job, $answerFiles, $connection, $region);
 
-        return DB::connection($connection)->transaction(function () use ($job, $data, $connection, $normalizedEmail, $resumeMeta) {
+        try {
+            return $this->createApplication($job, $data, $connection, $normalizedEmail, $resumeMeta, $storedFiles);
+        } catch (\Throwable $e) {
+            // The application was not created (e.g. a duplicate) — don't leave its files orphaned in storage.
+            $this->deleteStoredFiles($storedFiles);
+            throw $e;
+        }
+    }
+
+    protected function createApplication(Job $job, array $data, string $connection, string $normalizedEmail, ?array $resumeMeta, array $storedFiles): array
+    {
+        return DB::connection($connection)->transaction(function () use ($job, $data, $connection, $normalizedEmail, $resumeMeta, $storedFiles) {
             $candidate = Candidate::on($connection)
                 ->where('company_id', $job->company_id)
                 ->where('normalized_email', $normalizedEmail)
@@ -102,7 +189,7 @@ class PublicApplicationService
                 'lock_version' => 1,
             ]);
 
-            $this->storeAnswers($application, $data['answers'] ?? [], $connection);
+            $this->storeAnswers($application, $data['answers'] ?? [], $storedFiles, $connection);
 
             DB::connection($connection)->table('activity')->insert([
                 'id' => (string) Str::uuid(),
@@ -135,28 +222,106 @@ class PublicApplicationService
             ->get();
 
         foreach ($knockoutQuestions as $question) {
-            $answer = $answers[$question->id] ?? null;
+            if ($question->type === 'file_upload') {
+                continue; // a file cannot be compared with an expected answer
+            }
 
-            if ($answer !== null && strcasecmp(trim($answer), trim($question->knockout_expected_answer ?? '')) === 0) {
-                return [true, "Auto-rejected — knockout question \"{$question->question}\" answered \"{$answer}\"."];
+            // A multiple-choice answer is a list: the knockout fires if ANY chosen option is the disqualifying one.
+            foreach ($this->asList($answers[$question->id] ?? null) as $answer) {
+                if (strcasecmp($answer, trim($question->knockout_expected_answer ?? '')) === 0) {
+                    return [true, "Auto-rejected — knockout question \"{$question->question}\" answered \"{$answer}\"."];
+                }
             }
         }
 
         return [false, null];
     }
 
-    protected function storeAnswers(Application $application, array $answers, string $connection): void
+    /**
+     * Only answers to THIS job's questions are stored (a made-up question id used to hit the foreign key and
+     * fail the whole application with a 500). Multiple-choice answers are stored as a JSON list; a
+     * file-upload answer keeps the original file name in answer_text and the storage location in
+     * answer_file_disk / answer_file_path.
+     */
+    protected function storeAnswers(Application $application, array $answers, array $storedFiles, string $connection): void
     {
-        foreach ($answers as $questionId => $answerText) {
-            if (blank($answerText)) {
+        $questions = ApplicationQuestion::on($connection)->where('job_id', $application->job_id)->get();
+
+        foreach ($questions as $question) {
+            if ($question->type === 'file_upload') {
+                if ($file = $storedFiles[$question->id] ?? null) {
+                    ApplicationAnswer::on($connection)->create([
+                        'application_id' => $application->id,
+                        'question_id' => $question->id,
+                        'answer_text' => $file['name'],
+                        'answer_file_disk' => $file['disk'],
+                        'answer_file_path' => $file['path'],
+                    ]);
+                }
+                continue;
+            }
+
+            $values = $this->asList($answers[$question->id] ?? null);
+            if (empty($values)) {
                 continue;
             }
 
             ApplicationAnswer::on($connection)->create([
                 'application_id' => $application->id,
-                'question_id' => $questionId,
-                'answer_text' => $answerText,
+                'question_id' => $question->id,
+                'answer_text' => $question->type === 'multiple_choice'
+                    ? json_encode($values, JSON_UNESCAPED_UNICODE)
+                    : $values[0],
             ]);
+        }
+    }
+
+    /**
+     * Stores the uploaded files of the job's file_upload questions in the company's region bucket
+     * (PRD Sec 73 — same rule as resumes). Files for any other key are ignored.
+     *
+     * @return array<string, array{disk: string, path: string, name: string}> question id => stored file
+     */
+    protected function storeAnswerFiles(Job $job, array $files, string $connection, string $region): array
+    {
+        if (empty($files)) {
+            return [];
+        }
+
+        $fileQuestionIds = ApplicationQuestion::on($connection)
+            ->where('job_id', $job->id)->where('type', 'file_upload')
+            ->pluck('id')->all();
+
+        $disk = RegionResolver::storageDiskFor($region);
+        $stored = [];
+
+        try {
+            foreach ($files as $questionId => $file) {
+                if (!in_array($questionId, $fileQuestionIds, true) || !$file instanceof UploadedFile) {
+                    continue;
+                }
+                $path = $file->store("application-answers/{$job->company_id}", $disk);
+                if ($path === false) {
+                    throw new \RuntimeException('File upload failed. Please check storage configuration.');
+                }
+                $stored[$questionId] = ['disk' => $disk, 'path' => $path, 'name' => $file->getClientOriginalName()];
+            }
+        } catch (\Throwable $e) {
+            $this->deleteStoredFiles($stored);
+            throw $e;
+        }
+
+        return $stored;
+    }
+
+    protected function deleteStoredFiles(array $stored): void
+    {
+        foreach ($stored as $file) {
+            try {
+                Storage::disk($file['disk'])->delete($file['path']);
+            } catch (\Throwable $e) {
+                report($e); // cleanup is best-effort and must never mask the real error
+            }
         }
     }
 }

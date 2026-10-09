@@ -183,13 +183,13 @@ class PublicCareersController extends Controller
         }
         RateLimiter::hit($throttleKey, 300);
 
-        $answerErrors = $this->applications->validateAnswers($job, $data['answers'] ?? [], $connection);
+        $answerErrors = $this->applications->validateAnswers($job, $data['answers'] ?? [], $connection, $request->file('answer_files') ?? []);
         if (!empty($answerErrors)) {
             return response()->json(['message' => 'Some required questions were not answered.', 'errors' => $answerErrors], 422);
         }
 
         try {
-            $this->applications->submit($job, $data, $connection, $request->file('resume'));
+            $this->applications->submit($job, $data, $connection, $request->file('resume'), $request->file('answer_files') ?? []);
         } catch (DuplicateApplicationException $e) {
             return response()->json(['message' => $e->getMessage()], 422);
         }

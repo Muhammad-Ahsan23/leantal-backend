@@ -134,6 +134,8 @@ Route::middleware('auth:sanctum')->group(function () {
 
     Route::get('/jobs/{jobId}/applications', [ApplicationController::class, 'index']);
     Route::get('/applications/{id}', [ApplicationController::class, 'show']);
+    Route::get('/applications/{id}/answers', [ApplicationController::class, 'answers']);
+    Route::get('/applications/{id}/answers/{answerId}/file-url', [ApplicationController::class, 'answerFileUrl']);
     Route::patch('/applications/{id}/stage', [ApplicationController::class, 'moveStage']);
 
     Route::get('/tasks', [TaskController::class, 'index']);
