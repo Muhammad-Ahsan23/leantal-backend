@@ -19,6 +19,7 @@ use App\Http\Controllers\Api\SuperAdmin\SuperAdminNotificationController;
 use App\Http\Controllers\Api\ImpersonationController;
 use App\Http\Controllers\Api\ApplicationQuestionController;
 use App\Http\Controllers\Api\Auth\LoginController;
+use App\Http\Controllers\Api\SupportController;
 use App\Http\Controllers\Api\Auth\PasswordResetController;
 use App\Http\Controllers\Api\Auth\SignupController;
 use App\Http\Controllers\Api\BillingController;
@@ -49,6 +50,7 @@ Route::post('/signup', [SignupController::class, 'store']);
 
 Route::post('/login', [LoginController::class, 'login']);
 Route::post('/login/verify-otp', [LoginController::class, 'verifyOtp'])->middleware('throttle:10,1');
+Route::post('/login/resend-otp', [LoginController::class, 'resendOtp'])->middleware('throttle:10,1');
 
 Route::post('/forgot-password', [PasswordResetController::class, 'forgotPassword']);
 Route::post('/reset-password', [PasswordResetController::class, 'reset'])->middleware('throttle:10,1');
@@ -89,6 +91,7 @@ Route::middleware('auth:sanctum')->group(function () {
     Route::post('/logout', [LoginController::class, 'logout']);
     Route::post('/logout-all', [LoginController::class, 'logoutAll']);
     Route::get('/my-permissions', [PermissionsController::class, 'index']);
+    Route::get('/support/tawk-identity', [SupportController::class, 'tawkIdentity']);
 
     Route::get('/users', [UserController::class, 'index']);
     Route::post('/users/invite', [UserController::class, 'invite']);

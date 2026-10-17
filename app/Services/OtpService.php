@@ -9,7 +9,7 @@ use Illuminate\Support\Str;
 
 class OtpService
 {
-    protected const EXPIRY_MINUTES = 10;   // PRD Section 15
+    public const EXPIRY_MINUTES = 10;   // PRD Section 15
     protected const MAX_ATTEMPTS = 5;      // "Limit incorrect OTP attempts"
 
     /**
@@ -19,6 +19,12 @@ class OtpService
     public function generate(User $user, string $connection): string
     {
         $code = (string) random_int(100000, 999999);
+
+        // Newest code wins: any earlier unused code (login, then "Resend code") stops working right away.
+        DB::connection($connection)->table('login_otps')
+            ->where('user_id', $user->id)
+            ->whereNull('consumed_at')
+            ->delete();
 
         DB::connection($connection)->table('login_otps')->insert([
             'id' => (string) Str::uuid(),
@@ -30,6 +36,29 @@ class OtpService
         ]);
 
         return $code;
+    }
+
+    /**
+     * True when this user passed the password step recently and has not finished logging in:
+     * their latest code is unused and was issued within the last $withinMinutes minutes
+     * (it may already be expired - the user just needs a fresh one).
+     */
+    public function hasPendingLogin(User $user, string $connection, int $withinMinutes): bool
+    {
+        $latest = DB::connection($connection)->table('login_otps')
+            ->where('user_id', $user->id)
+            ->orderByDesc('created_at')
+            ->first();
+
+        if (!$latest || $latest->consumed_at !== null) {
+            return false;
+        }
+
+        // Compared in SQL (like verify() does) so the time zone is handled the same way in both places.
+        return DB::connection($connection)->table('login_otps')
+            ->where('id', $latest->id)
+            ->where('created_at', '>', now()->subMinutes($withinMinutes))
+            ->exists();
     }
 
     /**

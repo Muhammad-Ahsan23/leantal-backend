@@ -37,6 +37,11 @@ return [
 
     'frontend_url' => env('FRONTEND_URL'),
 
+    // Tawk.to live chat: API key from Tawk dashboard > Administration > Property Settings (used for Secure mode).
+    'tawk' => [
+        'api_key' => env('TAWKTO_API_KEY'),
+    ],
+
     'creem' => [
         'api_key' => env('CREEM_API_KEY'),
         'webhook_secret' => env('CREEM_WEBHOOK_SECRET'),

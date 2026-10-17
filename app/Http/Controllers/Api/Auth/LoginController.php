@@ -22,6 +22,9 @@ use Illuminate\Support\Facades\RateLimiter;
 class LoginController extends Controller
 {
     protected const ACCESS_TOKEN_MINUTES = 15;
+    protected const RESEND_COOLDOWN_SECONDS = 60;
+    protected const RESEND_MAX_PER_WINDOW = 5;     // per 10 minutes
+    protected const RESEND_WINDOW_MINUTES = 30;    // how long after the password step a resend is still allowed
 
     public function __construct(
         protected CaptchaService $captcha,
@@ -98,16 +101,86 @@ class LoginController extends Controller
         }
         RateLimiter::hit($otpSendKey, 300);
 
-        $code = $this->otp->generate($user, $connection);
-
-        Mail::raw("Your LeanTal verification code is: {$code}\n\nThis code expires in 10 minutes.", function ($message) use ($email) {
-            $message->to($email)->subject('Your LeanTal verification code');
-        });
+        $this->sendOtpMail($email, $this->otp->generate($user, $connection));
 
         return response()->json([
             'message' => 'A verification code has been sent to your email.',
             'email' => $email,
+            'cooldown_seconds' => self::RESEND_COOLDOWN_SECONDS,
+            'expires_in_seconds' => OtpService::EXPIRY_MINUTES * 60,
         ]);
+    }
+
+    /**
+     * "Resend code" on the verification screen. The caller has no password here, so this only works while a
+     * login is actually pending: the user's latest code must be unused and issued within the last
+     * RESEND_WINDOW_MINUTES. Otherwise they have to start again from the password step.
+     * The reply is identical whether or not the email exists (no account enumeration).
+     * Limits: one resend per RESEND_COOLDOWN_SECONDS, and at most RESEND_MAX_PER_WINDOW per 10 minutes.
+     */
+    public function resendOtp(Request $request)
+    {
+        $request->validate(['email' => ['required', 'email']]);
+        $email = strtolower(trim($request->input('email')));
+
+        $cooldownKey = 'otp-resend:'.$email;
+        if (RateLimiter::tooManyAttempts($cooldownKey, 1)) {
+            $wait = RateLimiter::availableIn($cooldownKey);
+            return response()->json([
+                'message' => "Please wait {$wait} seconds before requesting another code.",
+                'retry_after' => $wait,
+            ], 429);
+        }
+
+        $windowKey = 'otp-resend-window:'.$email;
+        if (RateLimiter::tooManyAttempts($windowKey, self::RESEND_MAX_PER_WINDOW)) {
+            return response()->json([
+                'message' => 'Too many codes requested. Please log in again in a few minutes.',
+                'retry_after' => RateLimiter::availableIn($windowKey),
+            ], 429);
+        }
+
+        // Count every attempt (even for unknown emails) so this cannot be used to probe or to spam.
+        RateLimiter::hit($cooldownKey, self::RESEND_COOLDOWN_SECONDS);
+        RateLimiter::hit($windowKey, 600);
+
+        $response = response()->json([
+            'message' => 'If a verification is pending for this email, a new code has been sent.',
+            'cooldown_seconds' => self::RESEND_COOLDOWN_SECONDS,
+            'expires_in_seconds' => OtpService::EXPIRY_MINUTES * 60,
+        ]);
+
+        $region = $this->routing->findRegionByEmail($email);
+        if (!$region) {
+            return $response;
+        }
+
+        $connection = RegionResolver::connectionFor($region);
+        $user = User::on($connection)->where('email', $email)->first();
+        if (!$user || $user->status !== 'active') {
+            return $response;
+        }
+
+        if (!$this->otp->hasPendingLogin($user, $connection, self::RESEND_WINDOW_MINUTES)) {
+            return $response;
+        }
+
+        $suspendedAt = DB::connection($connection)->table('companies')->where('id', $user->company_id)->value('suspended_at');
+        if ($suspendedAt || $this->companyIsDeleted($connection, $user->company_id)) {
+            return $response;
+        }
+
+        $this->sendOtpMail($email, $this->otp->generate($user, $connection));
+
+        return $response;
+    }
+
+    protected function sendOtpMail(string $email, string $code): void
+    {
+        $minutes = OtpService::EXPIRY_MINUTES;
+        Mail::raw("Your LeanTal verification code is: {$code}\n\nThis code expires in {$minutes} minutes.", function ($message) use ($email) {
+            $message->to($email)->subject('Your LeanTal verification code');
+        });
     }
 
     /**
