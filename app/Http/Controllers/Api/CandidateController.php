@@ -53,6 +53,8 @@ class CandidateController extends Controller
             'stage' => ['nullable', 'string', 'max:100'],
             'job_id' => ['nullable', 'uuid'],
             'assigned_user_id' => ['nullable', 'string', 'max:64'],
+            'page' => ['nullable', 'integer', 'min:1'],
+            'per_page' => ['nullable', 'integer', 'min:1', 'max:100'],
         ]);
 
         $user = $request->user();
@@ -114,7 +116,31 @@ class CandidateController extends Controller
             $query->where('assigned_user_id', $assignedTo);
         }
 
-        $candidates = $query->orderByDesc('created_at')->get()->map(function (Candidate $c) use ($jobId, $stage) {
+        // id as a tie-breaker so candidates created in the same instant never swap pages.
+        $query->orderByDesc('created_at')->orderBy('id');
+
+        // Pagination is opt-in: the Candidates page sends ?page=, while pickers/dashboard (which need
+        // everyone) keep calling without it and get the full list exactly as before.
+        $meta = null;
+        if ($request->has('page') || $request->has('per_page')) {
+            $paginator = $query->paginate(
+                min(100, max(1, (int) $request->query('per_page', 20))),
+                ['*'],
+                'page',
+                max(1, (int) $request->query('page', 1))
+            );
+            $rows = $paginator->getCollection();
+            $meta = [
+                'current_page' => $paginator->currentPage(),
+                'last_page' => $paginator->lastPage(),
+                'per_page' => $paginator->perPage(),
+                'total' => $paginator->total(),
+            ];
+        } else {
+            $rows = $query->get();
+        }
+
+        $candidates = $rows->map(function (Candidate $c) use ($jobId, $stage) {
             $primary = $c->applications->first(function ($a) use ($jobId, $stage) {
                 return (!$jobId || $a->job_id === $jobId)
                     && ($stage === '' || strcasecmp((string) $a->stage?->name, $stage) === 0);
@@ -129,7 +155,9 @@ class CandidateController extends Controller
             return $c;
         })->values();
 
-        return response()->json(['candidates' => $candidates]);
+        return response()->json($meta === null
+            ? ['candidates' => $candidates]
+            : ['candidates' => $candidates, 'meta' => $meta]);
     }
 
     /** Makes %, _ and \ in what the user typed match literally inside LIKE/ILIKE. */

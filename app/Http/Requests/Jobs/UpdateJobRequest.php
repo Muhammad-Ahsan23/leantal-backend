@@ -35,6 +35,8 @@ class UpdateJobRequest extends FormRequest
             'benefits' => ['nullable', 'string'],
             'team_info' => ['nullable', 'string'],
             'additional_sections' => ['nullable', 'array'],
+            'application_fields' => ['nullable', 'array'],
+            'application_fields.*' => ['string', 'in:required,optional,disabled'],
         ];
     }
 }

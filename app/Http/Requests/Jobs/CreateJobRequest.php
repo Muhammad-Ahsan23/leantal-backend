@@ -28,6 +28,8 @@ class CreateJobRequest extends FormRequest
             'team_info' => ['nullable', 'string'],
             'additional_sections' => ['nullable', 'array'],
             'assigned_user_id' => ['nullable', 'uuid'],
+            'application_fields' => ['nullable', 'array'],
+            'application_fields.*' => ['string', 'in:required,optional,disabled'],
             'publish' => ['boolean'], // if true, job goes straight to 'published' instead of 'draft'
         ];
     }

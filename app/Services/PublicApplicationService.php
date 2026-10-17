@@ -100,6 +100,128 @@ class PublicApplicationService
         return $errors;
     }
 
+    /** Resume upload is allowed unless this job switched it off. */
+    public function resumeAllowed(Job $job): bool
+    {
+        return $job->resolvedApplicationFields()['resume'] !== 'disabled';
+    }
+
+    /**
+     * Drops the built-in fields this job switched off (a candidate cannot send what the form does not
+     * show) and cleans the work-history / education lists down to the known keys.
+     */
+    public function applyFieldSettings(Job $job, array $data): array
+    {
+        $fields = $job->resolvedApplicationFields();
+
+        foreach (['phone', 'address', 'desired_salary', 'preferred_location', 'experience_summary', 'cover_letter'] as $key) {
+            if ($fields[$key] === 'disabled') {
+                unset($data[$key]);
+            }
+        }
+        if ($fields['linkedin'] === 'disabled') {
+            unset($data['linkedin_url']);
+        }
+
+        $data['work_history'] = $fields['work_history'] === 'disabled'
+            ? []
+            : $this->cleanEntries($data['work_history'] ?? [], ['company', 'title', 'start', 'end', 'description'], ['company', 'title']);
+        $data['education'] = $fields['education'] === 'disabled'
+            ? []
+            : $this->cleanEntries($data['education'] ?? [], ['school', 'degree', 'field', 'year'], ['school', 'degree']);
+
+        return $data;
+    }
+
+    /**
+     * Required fields of this job (PRD Sec 94: the application form is customizable per job).
+     * Returns a Laravel-style errors array keyed by field name (empty if valid).
+     */
+    public function validateProfileFields(Job $job, array $data, ?UploadedFile $resume = null): array
+    {
+        $fields = $job->resolvedApplicationFields();
+        $errors = [];
+
+        $text = [
+            'phone' => 'Phone number',
+            'address' => 'Address',
+            'desired_salary' => 'Desired salary',
+            'preferred_location' => 'Preferred location',
+            'experience_summary' => 'Experience summary',
+            'cover_letter' => 'Cover letter',
+        ];
+        foreach ($text as $key => $label) {
+            if ($fields[$key] === 'required' && trim((string) ($data[$key] ?? '')) === '') {
+                $errors[$key] = ["{$label} is required."];
+            }
+        }
+
+        if ($fields['linkedin'] === 'required' && trim((string) ($data['linkedin_url'] ?? '')) === '') {
+            $errors['linkedin_url'] = ['LinkedIn profile is required.'];
+        }
+
+        if ($fields['resume'] === 'required' && !$resume) {
+            $errors['resume'] = ['Please upload your resume.'];
+        }
+        if ($fields['work_history'] === 'required' && empty($data['work_history'])) {
+            $errors['work_history'] = ['Please add at least one work experience.'];
+        }
+        if ($fields['education'] === 'required' && empty($data['education'])) {
+            $errors['education'] = ['Please add at least one education entry.'];
+        }
+
+        return $errors;
+    }
+
+    /** Keeps only the allowed keys of each entry, and drops entries where none of the main keys is filled in. */
+    protected function cleanEntries(mixed $entries, array $allowedKeys, array $mainKeys): array
+    {
+        if (!is_array($entries)) {
+            return [];
+        }
+
+        $out = [];
+        foreach ($entries as $entry) {
+            if (!is_array($entry)) {
+                continue;
+            }
+            $clean = [];
+            foreach ($allowedKeys as $key) {
+                $clean[$key] = is_scalar($entry[$key] ?? null) ? trim((string) $entry[$key]) : '';
+            }
+            $hasMain = false;
+            foreach ($mainKeys as $key) {
+                if ($clean[$key] !== '') {
+                    $hasMain = true;
+                }
+            }
+            if ($hasMain) {
+                $out[] = $clean;
+            }
+        }
+
+        return $out;
+    }
+
+    /** The per-application extras, or null when the candidate filled none in. */
+    protected function buildApplicationData(array $data): ?array
+    {
+        $out = [];
+        foreach (['address', 'desired_salary', 'preferred_location', 'experience_summary', 'cover_letter'] as $key) {
+            $value = trim((string) ($data[$key] ?? ''));
+            if ($value !== '') {
+                $out[$key] = $value;
+            }
+        }
+        foreach (['work_history', 'education'] as $key) {
+            if (!empty($data[$key])) {
+                $out[$key] = $data[$key];
+            }
+        }
+
+        return $out ?: null;
+    }
+
     /** A string or a list of strings -> a clean list with blanks removed. */
     protected function asList(mixed $value): array
     {
@@ -149,6 +271,7 @@ class PublicApplicationService
                     'email' => $data['email'],
                     'normalized_email' => $normalizedEmail,
                     'phone' => $data['phone'] ?? null,
+                    'location' => ($data['preferred_location'] ?? null) ?: null,
                     'linkedin_url' => $data['linkedin_url'] ?? null,
                     // Unassigned — nobody "owns" a self-applied candidate
                     // until a staff member picks them up. Unlike manually
@@ -187,6 +310,7 @@ class PublicApplicationService
                 'rejected_at' => $knockoutTriggered ? now() : null,
                 'rejection_reason_internal' => $knockoutReason,
                 'lock_version' => 1,
+                'application_data' => $this->buildApplicationData($data),
             ]);
 
             $this->storeAnswers($application, $data['answers'] ?? [], $storedFiles, $connection);

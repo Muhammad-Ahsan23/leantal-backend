@@ -141,8 +141,14 @@ class UserController extends Controller
         // upsert, so a re-invite simply refreshes it.
         $this->routing->recordUserEmail($email, $actor->company_id, RegionResolver::resolve($company->country_code));
 
-        $inviteUrl = FrontendUrl::to('/accept-invite', ['email' => $email, 'token' => $rawToken]);
+        // PRD Section 88 — the Owner invites "by name, email, role". The name is carried in the link so the
+        // invitee's "Full name" box is already filled in (they can still change it). It is only a convenience:
+        // the account's name is whatever the invitee submits on the accept-invite form.
         $name = trim((string) $request->input('name'));
+        $inviteUrl = FrontendUrl::to('/accept-invite', array_filter(
+            ['email' => $email, 'token' => $rawToken, 'name' => $name],
+            fn ($v) => $v !== ''
+        ));
         $role = str_replace('_', ' ', $request->input('role'));
 
         try {

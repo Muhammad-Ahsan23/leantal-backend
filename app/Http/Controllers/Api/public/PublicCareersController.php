@@ -120,7 +120,8 @@ class PublicCareersController extends Controller
         $job = Job::on($connection)
             ->where('company_id', $company['company_id'])
             ->where('status', 'published')
-            ->find($jobId, self::PUBLIC_JOB_FIELDS);
+            // application_fields tells the apply form which fields to show / require for this job.
+            ->find($jobId, array_merge(self::PUBLIC_JOB_FIELDS, ['application_fields']));
 
         if (!$job) {
             return response()->json(['message' => 'Job not found or no longer accepting applications.'], 404);
@@ -183,13 +184,19 @@ class PublicCareersController extends Controller
         }
         RateLimiter::hit($throttleKey, 300);
 
+        // Fields this job switched off are dropped; fields it made Required are checked here.
+        $resume = $this->applications->resumeAllowed($job) ? $request->file('resume') : null;
+        $data = $this->applications->applyFieldSettings($job, $data);
+        $profileErrors = $this->applications->validateProfileFields($job, $data, $resume);
+
         $answerErrors = $this->applications->validateAnswers($job, $data['answers'] ?? [], $connection, $request->file('answer_files') ?? []);
+        $answerErrors = array_merge($profileErrors, $answerErrors);
         if (!empty($answerErrors)) {
             return response()->json(['message' => 'Some required questions were not answered.', 'errors' => $answerErrors], 422);
         }
 
         try {
-            $this->applications->submit($job, $data, $connection, $request->file('resume'), $request->file('answer_files') ?? []);
+            $this->applications->submit($job, $data, $connection, $resume, $request->file('answer_files') ?? []);
         } catch (DuplicateApplicationException $e) {
             return response()->json(['message' => $e->getMessage()], 422);
         }

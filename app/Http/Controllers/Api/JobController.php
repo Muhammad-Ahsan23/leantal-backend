@@ -40,11 +40,23 @@ class JobController extends Controller
         $user = $request->user();
         $connection = $user->getConnectionName();
 
-        $filters = $request->only(['status', 'department', 'search', 'assigned_user_id']);
-        $version = CacheVersion::get("company:{$user->company_id}:jobs");
-        $cacheKey = "jobs:v{$version}:".$user->id.':'.md5(json_encode($filters));
+        $request->validate([
+            'page' => ['nullable', 'integer', 'min:1'],
+            'per_page' => ['nullable', 'integer', 'min:1', 'max:100'],
+        ]);
 
-        $jobs = Cache::remember($cacheKey, 60, function () use ($user, $connection, $filters) {
+        $filters = $request->only(['status', 'department', 'search', 'assigned_user_id']);
+
+        // Pagination is opt-in: the Jobs page sends ?page=, while pickers/dashboard (which need every job)
+        // keep calling without it and get the full list exactly as before.
+        $paginate = $request->has('page') || $request->has('per_page');
+        $page = max(1, (int) $request->query('page', 1));
+        $perPage = min(100, max(1, (int) $request->query('per_page', 20)));
+
+        $version = CacheVersion::get("company:{$user->company_id}:jobs");
+        $cacheKey = "jobs:v{$version}:".$user->id.':'.md5(json_encode([$filters, $paginate ? [$page, $perPage] : null]));
+
+        $result = Cache::remember($cacheKey, 60, function () use ($user, $connection, $filters, $paginate, $page, $perPage) {
             $query = Job::on($connection)->visibleTo($user)->with('assignedUser:id,name');
 
             if (!empty($filters['status'])) {
@@ -60,7 +72,22 @@ class JobController extends Controller
                 $query->where('title', 'ilike', '%'.$filters['search'].'%');
             }
 
-            $jobs = $query->orderByDesc('created_at')->get();
+            // id as a tie-breaker so two jobs created in the same instant never swap pages.
+            $query->orderByDesc('created_at')->orderBy('id');
+
+            $meta = null;
+            if ($paginate) {
+                $paginator = $query->paginate($perPage, ['*'], 'page', $page);
+                $jobs = $paginator->getCollection();
+                $meta = [
+                    'current_page' => $paginator->currentPage(),
+                    'last_page' => $paginator->lastPage(),
+                    'per_page' => $paginator->perPage(),
+                    'total' => $paginator->total(),
+                ];
+            } else {
+                $jobs = $query->get();
+            }
 
             // PRD Section 21 — "Applicant count" column. Single grouped
             // query (not one-per-job) to avoid N+1 as the jobs list grows.
@@ -72,10 +99,12 @@ class JobController extends Controller
 
             $jobs->each(fn ($job) => $job->applicants_count = $counts[$job->id] ?? 0);
 
-            return $jobs;
+            return ['jobs' => $jobs, 'meta' => $meta];
         });
 
-        return response()->json(['jobs' => $jobs]);
+        return response()->json($result['meta'] === null
+            ? ['jobs' => $result['jobs']]
+            : ['jobs' => $result['jobs'], 'meta' => $result['meta']]);
     }
 
     public function store(CreateJobRequest $request)

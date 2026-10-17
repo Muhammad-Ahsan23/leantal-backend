@@ -46,6 +46,10 @@ class JobService
         $company = Company::on($connection)->find($creator->company_id);
         $this->assertJobLimitNotReached($company, $connection);
 
+        if (array_key_exists('application_fields', $data) && is_array($data['application_fields'])) {
+            $data['application_fields'] = Job::normalizeApplicationFields($data['application_fields']);
+        }
+
         $job = DB::connection($connection)->transaction(function () use ($data, $creator, $connection) {
             $job = Job::on($connection)->create([
                 ...$data,
@@ -74,6 +78,10 @@ class JobService
 
     public function update(Job $job, array $data, string $connection): Job
     {
+        if (array_key_exists('application_fields', $data) && is_array($data['application_fields'])) {
+            $data['application_fields'] = Job::normalizeApplicationFields($data['application_fields']);
+        }
+
         $job->update($data);
         $this->forgetJobsCache($job->company_id);
 

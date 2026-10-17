@@ -13,6 +13,7 @@ class Application extends Model
         'company_id', 'candidate_id', 'job_id', 'stage_id',
         'status', 'rejection_reason_internal',
         'applied_at', 'rejected_at', 'hired_at', 'lock_version',
+        'application_data',
     ];
 
     protected $casts = [
@@ -20,6 +21,7 @@ class Application extends Model
         'rejected_at' => 'datetime',
         'hired_at' => 'datetime',
         'lock_version' => 'integer',
+        'application_data' => 'array',
     ];
 
     // rejection_reason_internal is deliberately hidden — PRD Section 29/38:
