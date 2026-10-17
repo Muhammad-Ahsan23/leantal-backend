@@ -24,7 +24,14 @@ class CompanyController extends Controller
         $connection = $user->getConnectionName();
         $company = Company::on($connection)->find($user->company_id);
 
-        return response()->json(['company' => $company]);
+        $payload = $company ? $company->toArray() : null;
+        if ($payload && $company->past_due_since) {
+            // When the failed-payment grace period ends (the banner shows this date).
+            $payload['past_due_grace_ends_at'] = $company->past_due_since
+                ->copy()->addDays((int) config('billing.past_due_grace_days', 7))->toIso8601String();
+        }
+
+        return response()->json(['company' => $payload]);
     }
 
     /**

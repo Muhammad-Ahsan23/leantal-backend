@@ -22,6 +22,7 @@ class Company extends Model
         'subscription_status',
         'trial_start',
         'trial_end',
+        'past_due_since',
         // BUG FIX: these were missing, so Eloquent's mass-assignment
         // protection silently DROPPED them on every ->update([...]):
         //  - deletion trio: CompanyController::delete() never persisted anything
@@ -38,6 +39,7 @@ class Company extends Model
     protected $casts = [
         'trial_start' => 'datetime',
         'trial_end' => 'datetime',
+        'past_due_since' => 'datetime',
         'deletion_requested_at' => 'datetime',
         'deleted_at' => 'datetime',
         'suspended_at' => 'datetime',

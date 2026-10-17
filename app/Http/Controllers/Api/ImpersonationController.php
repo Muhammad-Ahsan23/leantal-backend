@@ -24,7 +24,8 @@ class ImpersonationController extends Controller
     {
         $token = $request->user()->currentAccessToken();
 
-        if (!$token || !$token->can('impersonation')) {
+        // in_array, not can(): Sanctum's can() is true for ANY ability on a wildcard ['*'] token (every normal login).
+        if (!$token || !in_array('impersonation', (array) ($token->abilities ?? []), true)) {
             return response()->json(['message' => 'This session is not an impersonation session.'], 422);
         }
 

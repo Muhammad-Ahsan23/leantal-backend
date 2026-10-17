@@ -24,7 +24,11 @@ class SuperAdminSearchController extends Controller
         $results = ['companies' => collect(), 'users' => collect(), 'candidates' => collect(), 'jobs' => collect()];
 
         foreach (self::REGIONS as $region => $connection) {
+            // Only this region's own data (see REGION SCOPING note on the Companies list).
+            $ownCompanies = fn ($q) => $q->select('id')->from('companies')->where('region', $region);
+
             $companies = DB::connection($connection)->table('companies')
+                ->where('region', $region)
                 ->where('name', 'ilike', $like)
                 ->limit(10)
                 ->get(['id', 'name', 'plan', 'subscription_status']);
@@ -34,6 +38,7 @@ class SuperAdminSearchController extends Controller
             }
 
             $users = DB::connection($connection)->table('users')
+                ->whereIn('company_id', $ownCompanies)
                 ->where('email', 'ilike', $like)
                 ->limit(10)
                 ->get(['id', 'name', 'email', 'role', 'company_id']);
@@ -43,6 +48,7 @@ class SuperAdminSearchController extends Controller
             }
 
             $candidates = DB::connection($connection)->table('candidates')
+                ->whereIn('company_id', $ownCompanies)
                 ->where('email', 'ilike', $like)
                 ->whereNull('deleted_at')
                 ->limit(10)
@@ -53,6 +59,7 @@ class SuperAdminSearchController extends Controller
             }
 
             $jobs = DB::connection($connection)->table('jobs')
+                ->whereIn('company_id', $ownCompanies)
                 ->where('title', 'ilike', $like)
                 ->limit(10)
                 ->get(['id', 'title', 'status', 'company_id']);

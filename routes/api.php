@@ -92,6 +92,7 @@ Route::middleware('auth:sanctum')->group(function () {
 
     Route::get('/users', [UserController::class, 'index']);
     Route::post('/users/invite', [UserController::class, 'invite']);
+    Route::get('/users/{id}/workload', [UserController::class, 'workload']);
     Route::delete('/users/{id}', [UserController::class, 'remove']);
     Route::patch('/users/{id}', [UserController::class, 'update']);
 

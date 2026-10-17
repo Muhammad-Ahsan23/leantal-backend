@@ -61,7 +61,8 @@ class BillingController extends Controller
         $company = Company::on($connection)->find($user->company_id);
         $data = $request->validated();
 
-        $hasActiveSubscription = $company->subscription_status === 'active' && $company->creem_subscription_id;
+        // past_due still has a live subscription: offering a NEW checkout would create a second one.
+        $hasActiveSubscription = in_array($company->subscription_status, ['active', 'past_due'], true) && $company->creem_subscription_id;
 
         $currentTier = self::PLAN_TIERS[$company->plan] ?? 0;
         $newTier = self::PLAN_TIERS[$data['plan']] ?? 0;

@@ -16,6 +16,8 @@ use App\Services\NotificationService;
 use App\Services\RefreshTokenService;
 use App\Services\RegionResolver;
 use App\Services\RegionRoutingRepository;
+use App\Support\ActivityLogger;
+use App\Support\CacheVersion;
 use App\Support\FrontendUrl;
 use Illuminate\Http\Request;
 use Illuminate\Support\Facades\DB;
@@ -321,7 +323,11 @@ class UserController extends Controller
      * is cleared so the work shows as unassigned rather than orphaned.
      * Sessions are revoked immediately (access must end at removal time).
      */
-    public function remove(Request $request, string $userId)
+    /**
+     * PRD Sections 70 / 153 — what a removal would affect, so the confirm dialog can show the real
+     * numbers and offer "reassign to…". Same permission rule as removal itself.
+     */
+    public function workload(Request $request, string $userId)
     {
         $actor = $request->user();
         $connection = $actor->getConnectionName();
@@ -336,18 +342,92 @@ class UserController extends Controller
             return response()->json(['message' => 'You do not have permission to remove this user.'], 403);
         }
 
-        $target->forceFill(['status' => 'removed', 'removed_at' => now()])->save();
+        return response()->json(['workload' => $this->workloadFor($connection, $actor->company_id, $target->id)]);
+    }
 
-        Job::on($connection)->where('assigned_user_id', $target->id)->update(['assigned_user_id' => null]);
-        Candidate::on($connection)->where('assigned_user_id', $target->id)->update(['assigned_user_id' => null]);
-        Task::on($connection)->where('assigned_user_id', $target->id)->update(['assigned_user_id' => null]);
+    /**
+     * Open work only: jobs and candidates assigned to the user, and tasks that are still to do / in
+     * progress. Finished and cancelled tasks are history and stay attached to the user.
+     */
+    protected function workloadFor(string $connection, string $companyId, string $userId): array
+    {
+        return [
+            'jobs' => Job::on($connection)->where('company_id', $companyId)->where('assigned_user_id', $userId)->count(),
+            'candidates' => Candidate::on($connection)->where('company_id', $companyId)->where('assigned_user_id', $userId)->count(),
+            'tasks' => Task::on($connection)->where('company_id', $companyId)->where('assigned_user_id', $userId)
+                ->whereIn('status', ['to_do', 'in_progress'])->count(),
+        ];
+    }
+
+    /**
+     * PRD Sections 70 / 153 — removal never deletes history. The user's open work either becomes
+     * Unassigned (default) or is moved to `reassign_to` in one atomic step.
+     */
+    public function remove(Request $request, string $userId)
+    {
+        $actor = $request->user();
+        $connection = $actor->getConnectionName();
+
+        $request->validate(['reassign_to' => ['nullable', 'uuid']]);
+
+        $target = User::on($connection)->where('company_id', $actor->company_id)->find($userId);
+
+        if (!$target) {
+            return response()->json(['message' => 'User not found.'], 404);
+        }
+
+        if (!$actor->can('remove', $target)) {
+            return response()->json(['message' => 'You do not have permission to remove this user.'], 403);
+        }
+
+        $newAssignee = null;
+        if ($request->filled('reassign_to')) {
+            $newAssignee = User::on($connection)
+                ->where('company_id', $actor->company_id)
+                ->where('status', 'active')
+                ->where('id', '!=', $target->id)
+                ->find($request->input('reassign_to'));
+
+            if (!$newAssignee) {
+                return response()->json(['message' => 'Choose an active team member to reassign the work to.'], 422);
+            }
+        }
+
+        $newId = $newAssignee?->id;
+        $counts = $this->workloadFor($connection, $actor->company_id, $target->id);
+
+        DB::connection($connection)->transaction(function () use ($connection, $actor, $target, $newId) {
+            $target->forceFill(['status' => 'removed', 'removed_at' => now()])->save();
+
+            Job::on($connection)->where('company_id', $actor->company_id)->where('assigned_user_id', $target->id)
+                ->update(['assigned_user_id' => $newId]);
+            Candidate::on($connection)->where('company_id', $actor->company_id)->where('assigned_user_id', $target->id)
+                ->update(['assigned_user_id' => $newId]);
+            Task::on($connection)->where('company_id', $actor->company_id)->where('assigned_user_id', $target->id)
+                ->whereIn('status', ['to_do', 'in_progress'])
+                ->update(['assigned_user_id' => $newId]);
+        });
 
         $target->tokens()->delete();
         $this->refreshTokens->revokeAllForUser($connection, $target->id);
 
-        Log::info('User removed', ['email' => $target->email, 'removed_by' => $actor->email]);
+        // Lists are cached per company; without this the Jobs/Candidates pages keep showing the old assignee.
+        CacheVersion::bump("company:{$actor->company_id}:jobs");
+        CacheVersion::bump("company:{$actor->company_id}:candidates");
 
-        return response()->json(['message' => 'User removed.']);
+        ActivityLogger::log($connection, $actor->company_id, $actor->id, 'user.removed', 'user', $target->id, [
+            'user_name' => $target->name,
+            'reassigned_to_user_id' => $newId,
+            'reassigned_to_name' => $newAssignee?->name,
+            'moved' => $counts,
+        ]);
+
+        Log::info('User removed', ['email' => $target->email, 'removed_by' => $actor->email, 'reassigned_to' => $newId]);
+
+        return response()->json([
+            'message' => $newAssignee ? "User removed. Their work was reassigned to {$newAssignee->name}." : 'User removed. Their work is now unassigned.',
+            'moved' => $counts,
+        ]);
     }
 
     protected function invalidInvite()

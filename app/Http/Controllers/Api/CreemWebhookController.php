@@ -49,6 +49,15 @@ class CreemWebhookController extends Controller
     protected const EVENT_EXPIRED = 'subscription.expired';
 
     /**
+     * A renewal charge failed and Creem is retrying. The company keeps FULL access for the grace
+     * period (config billing.past_due_grace_days) and the Owner sees a banner to fix the card.
+     */
+    protected const EVENT_PAST_DUE = 'subscription.past_due';
+
+    /** Retries are exhausted — nothing has been paid, so the company becomes read_only. */
+    protected const EVENT_UNPAID = 'subscription.unpaid';
+
+    /**
      * Events we deliberately only LOG for now rather than act on — each
      * would need a subscription_status value or business rule PRD never
      * specified (e.g. what UI shows during "scheduled to cancel" or
@@ -58,8 +67,6 @@ class CreemWebhookController extends Controller
      */
     protected const EVENTS_LOGGED_ONLY = [
         'subscription.scheduled_cancel',
-        'subscription.past_due',
-        'subscription.unpaid',
         'subscription.trialing',
         'subscription.paused',
         'subscription.update',
@@ -112,6 +119,21 @@ class CreemWebhookController extends Controller
             $this->activateSubscription($companyId, $object);
         } elseif ($eventType === self::EVENT_CANCELED) {
             $this->updateCompany($companyId, ['subscription_status' => 'cancelled']);
+        } elseif ($eventType === self::EVENT_PAST_DUE) {
+            // Only an ACTIVE (or already past-due) subscription can slip into past_due. A late or
+            // out-of-order event must never undo a cancellation or reopen a read_only company.
+            $this->transition($companyId, ['active', 'past_due'], function (Company $company) {
+                return [
+                    'subscription_status' => 'past_due',
+                    // keep the ORIGINAL date on repeated failures: the grace period doesn't restart
+                    'past_due_since' => $company->past_due_since ?? now(),
+                ];
+            });
+        } elseif ($eventType === self::EVENT_UNPAID) {
+            $this->transition($companyId, ['active', 'past_due'], fn () => [
+                'subscription_status' => 'read_only',
+                'past_due_since' => null,
+            ]);
         } elseif ($eventType === self::EVENT_EXPIRED) {
             // PRD Section 129 — never delete data, just lock access.
             $this->updateCompany($companyId, ['subscription_status' => 'read_only']);
@@ -177,7 +199,37 @@ class CreemWebhookController extends Controller
             'plan' => $plan,
             'creem_customer_id' => $customerId,
             'creem_subscription_id' => $subscriptionId,
-        ]));
+        ]) + [
+            // A successful payment ends any grace period. (Added after array_filter, which drops nulls.)
+            'past_due_since' => null,
+        ]);
+    }
+
+    /**
+     * Applies a status change only when the company is currently in one of $fromStatuses. $changes
+     * receives the Company and returns the columns to write.
+     */
+    protected function transition(string $companyId, array $fromStatuses, callable $changes): void
+    {
+        $region = $this->routing->findRegionByCompanyId($companyId);
+        if (!$region) {
+            Log::warning('Creem webhook: unknown company_id', ['company_id' => $companyId]);
+            return;
+        }
+
+        $company = Company::on(RegionResolver::connectionFor($region))->find($companyId);
+        if (!$company) {
+            return;
+        }
+
+        if (!in_array($company->subscription_status, $fromStatuses, true)) {
+            Log::info('Creem webhook: status change ignored for current state', [
+                'company_id' => $companyId, 'current' => $company->subscription_status,
+            ]);
+            return;
+        }
+
+        $company->update($changes($company));
     }
 
     protected function updateCompany(string $companyId, array $data): void

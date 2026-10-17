@@ -161,7 +161,7 @@ class CompanyPurgeService
 
         // A paying company whose subscription id was never stored cannot be cancelled
         // from here. Refuse rather than delete it and leave the customer being billed.
-        if ($company->subscription_status === 'active') {
+        if (in_array($company->subscription_status, ['active', 'past_due'], true)) {
             throw new \RuntimeException(
                 "We couldn't find the billing subscription for this company, so it can't be cancelled automatically. "
                     . 'Please contact support to cancel it first, then delete the company.'

@@ -41,6 +41,16 @@ class SuperAdminAuthService
     }
 
     /**
+     * @throws \RuntimeException if this account already finished MFA setup
+     */
+    protected function assertNotEnrolled(SuperAdmin $admin): void
+    {
+        if ($admin->mfa_enabled_at) {
+            throw new \RuntimeException('Two-factor authentication is already set up on this account. Please sign in with your authenticator code. If you lost your device, ask a server administrator to reset it.');
+        }
+    }
+
+    /**
      * First-time setup only. Generates and PERSISTS a new secret
      * immediately (overwriting any previous unconfirmed one) — nothing
      * is active yet until confirmEnrollment() succeeds.
@@ -50,6 +60,11 @@ class SuperAdminAuthService
     public function startMfaEnrollment(string $email, string $password): array
     {
         $admin = $this->verifyPassword($email, $password);
+
+        // Once MFA is active it can NOT be re-enrolled through the API: with only the password, anyone could
+        // swap in their own authenticator and bypass the second factor. A lost phone is reset on the server
+        // with `php artisan super-admin:reset-mfa {email}`.
+        $this->assertNotEnrolled($admin);
 
         $secret = $this->totp->generateSecret();
         $admin->update(['mfa_secret' => $secret]);
@@ -70,6 +85,8 @@ class SuperAdminAuthService
     public function confirmMfaEnrollment(string $email, string $password, string $code): string
     {
         $admin = $this->verifyPassword($email, $password);
+
+        $this->assertNotEnrolled($admin);
 
         if (!$admin->mfa_secret) {
             throw new \RuntimeException('Call the enrollment endpoint first.');

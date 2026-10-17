@@ -19,6 +19,12 @@ class SuperAdminCompanyController extends Controller
      * Region, Plan & Status, Trial end date, Created date & User
      * count." Queries all 3 regions and merges — companies are
      * physically split by region, there's no single cross-region table.
+     *
+     * REGION SCOPING: each connection only reports companies whose own `region` column matches that
+     * connection's region. In production the three connections are separate clusters, so this changes
+     * nothing. While they all point at ONE database (config/database.php allows it for local/test), an
+     * unscoped loop would report every company three times - tripling counts and, for a broadcast,
+     * notifying every user three times.
      */
     public function index(Request $request)
     {
@@ -35,6 +41,7 @@ class SuperAdminCompanyController extends Controller
                     'c.created_at', 'c.suspended_at',
                     'owner.name as owner_name', 'owner.email as owner_email'
                 )
+                ->where('c.region', $region)
                 ->selectRaw("'{$region}' as region");
 
             if ($search) {
@@ -135,10 +142,34 @@ class SuperAdminCompanyController extends Controller
             'suspended_reason' => $request->input('reason'),
         ]);
 
+        // PRD Section 119 — a suspended company's people are locked out NOW, not whenever their
+        // access token happens to expire: delete every access token and revoke every refresh session.
+        $revokedUsers = $this->revokeAllSessions($connection, $companyId);
+
         $admin = $request->attributes->get('super_admin');
-        $this->audit->log($admin, 'company_suspended', $request->ip(), 'company', $companyId, ['reason' => $request->input('reason')]);
+        $this->audit->log($admin, 'company_suspended', $request->ip(), 'company', $companyId, [
+            'reason' => $request->input('reason'),
+            'sessions_revoked_for_users' => $revokedUsers,
+        ]);
 
         return response()->json(['message' => 'Company suspended.']);
+    }
+
+    /**
+     * Deletes the access tokens and revokes the refresh sessions of every user in the company.
+     * Returns how many users were affected (recorded in the audit log).
+     */
+    protected function revokeAllSessions(string $connection, string $companyId): int
+    {
+        $refreshTokens = app(\App\Services\RefreshTokenService::class);
+        $users = \App\Models\User::on($connection)->where('company_id', $companyId)->get();
+
+        foreach ($users as $user) {
+            $user->tokens()->delete();
+            $refreshTokens->revokeAllForUser($connection, $user->id);
+        }
+
+        return $users->count();
     }
 
     public function reactivate(Request $request, string $companyId)

@@ -33,8 +33,10 @@ class SuperAdminNotificationController extends Controller
         $totalSent = 0;
 
         if ($data['target'] === 'all') {
-            foreach (self::REGIONS as $connection) {
-                $companyIds = DB::connection($connection)->table('companies')->pluck('id');
+            foreach (self::REGIONS as $region => $connection) {
+                // Only this region's own companies: while the connections share one database, an unscoped
+                // loop would notify every user once per connection (three times).
+                $companyIds = DB::connection($connection)->table('companies')->where('region', $region)->pluck('id');
                 foreach ($companyIds as $companyId) {
                     $totalSent += $this->notifications->broadcast($companyId, $data['message'], [], $connection);
                 }

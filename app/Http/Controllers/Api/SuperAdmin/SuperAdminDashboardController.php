@@ -35,7 +35,9 @@ class SuperAdminDashboardController extends Controller
         $recentSignups = 0;
 
         foreach (self::REGIONS as $connection) {
-            $companies = DB::connection($connection)->table('companies')->get(['subscription_status', 'suspended_at', 'created_at']);
+            // Only this region's own companies (see REGION SCOPING note on the Companies list).
+            $region = strtolower(substr($connection, -2));
+            $companies = DB::connection($connection)->table('companies')->where('region', $region)->get(['subscription_status', 'suspended_at', 'created_at']);
 
             $totals['total'] += $companies->count();
             $totals['active'] += $companies->where('subscription_status', 'active')->count();
@@ -44,8 +46,11 @@ class SuperAdminDashboardController extends Controller
             $totals['cancelled'] += $companies->where('subscription_status', 'cancelled')->count();
             $totals['suspended'] += $companies->whereNotNull('suspended_at')->count();
 
-            $totalUsers += DB::connection($connection)->table('users')->count();
-            $recentSignups += DB::connection($connection)->table('companies')->where('created_at', '>=', now()->subDays(7))->count();
+            $totalUsers += DB::connection($connection)->table('users')
+                ->whereIn('company_id', fn ($q) => $q->select('id')->from('companies')->where('region', $region))
+                ->count();
+            $recentSignups += DB::connection($connection)->table('companies')
+                ->where('region', $region)->where('created_at', '>=', now()->subDays(7))->count();
         }
 
         // Best-effort proxy for "integration failures" until Section 82's

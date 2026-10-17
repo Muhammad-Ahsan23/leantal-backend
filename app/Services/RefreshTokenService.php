@@ -77,6 +77,14 @@ class RefreshTokenService
             return null;
         }
 
+        // PRD Section 119 — a suspended company can't mint new access tokens from an old refresh token.
+        $suspended = DB::connection($connection)->table('companies')
+            ->where('id', $user->company_id)->whereNotNull('suspended_at')->exists();
+        if ($suspended) {
+            $this->revokeAllForUser($connection, $user->id);
+            return null;
+        }
+
         DB::connection($connection)->table('sessions')
             ->where('id', $session->id)
             ->update(['revoked_at' => now()]);
