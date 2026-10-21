@@ -34,6 +34,7 @@ class UpdateCandidateRequest extends FormRequest
             'name' => ['sometimes', 'required', 'string', 'max:255'],
             'phone' => ['sometimes', 'nullable', 'string', 'max:50'],
             'location' => ['sometimes', 'nullable', 'string', 'max:255'],
+            'address' => ['sometimes', 'nullable', 'string', 'max:500'],
             'current_title' => ['sometimes', 'nullable', 'string', 'max:255'],
             'current_company' => ['sometimes', 'nullable', 'string', 'max:255'],
             'linkedin_url' => ['sometimes', 'nullable', 'url:http,https', 'max:255'],

@@ -43,7 +43,7 @@ class InterviewController extends Controller
             $query->where('start_time', '<=', $to);
         }
 
-        return response()->json(['interviews' => $query->orderBy('start_time')->get()]);
+        return response()->json(['interviews' => $query->orderBy('start_time')->limit(1000)->get()]); // safety net if no from/to is sent
     }
 
     public function show(Request $request, string $id)

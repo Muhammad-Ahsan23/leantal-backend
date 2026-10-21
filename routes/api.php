@@ -43,6 +43,7 @@ use App\Http\Controllers\Api\PermissionsController;
 use App\Http\Controllers\Api\PipelineStageController;
 use App\Http\Controllers\Api\Public\PublicCareersController;
 use App\Http\Controllers\Api\TaskController;
+use App\Http\Controllers\Api\TaskAttachmentController;
 use App\Http\Controllers\Api\UserController;
 use Illuminate\Support\Facades\Route;
 
@@ -135,6 +136,7 @@ Route::middleware('auth:sanctum')->group(function () {
     Route::post('/candidates/{id}/notes', [CandidateController::class, 'addNote']);
     Route::get('/candidates/{id}/resume-url', [CandidateController::class, 'resumeUrl']);
     Route::get('/candidates/{id}/activity', [CandidateController::class, 'activity']);
+    Route::post('/candidates/{id}/resume', [CandidateController::class, 'replaceResume']);
 
     Route::get('/jobs/{jobId}/applications', [ApplicationController::class, 'index']);
     Route::get('/applications/{id}', [ApplicationController::class, 'show']);
@@ -147,6 +149,10 @@ Route::middleware('auth:sanctum')->group(function () {
     Route::get('/tasks/{id}', [TaskController::class, 'show']);
     Route::patch('/tasks/{id}/status', [TaskController::class, 'updateStatus']);
     Route::delete('/tasks/{id}', [TaskController::class, 'destroy']);
+    Route::patch('/tasks/{id}', [TaskController::class, 'update']);
+    Route::post('/tasks/{id}/attachments', [TaskAttachmentController::class, 'store']);
+    Route::get('/tasks/{id}/attachments/{attachmentId}/url', [TaskAttachmentController::class, 'url']);
+    Route::delete('/tasks/{id}/attachments/{attachmentId}', [TaskAttachmentController::class, 'destroy']);
 
     Route::get('/interviews', [InterviewController::class, 'index']);
     Route::post('/interviews', [InterviewController::class, 'store']);

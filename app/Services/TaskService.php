@@ -39,6 +39,27 @@ class TaskService
         return $task;
     }
 
+    /** Edit details. Notifies the new assignee when the task is reassigned. */
+    public function update(Task $task, array $data, User $actor, string $connection): Task
+    {
+        $oldAssignee = $task->assigned_user_id;
+        $task->update($data);
+
+        $this->logActivity($connection, $task->company_id, $actor->id, 'task.updated', $task->id, [
+            'title' => $task->title,
+            'fields' => array_keys($data),
+        ]);
+
+        if ($task->assigned_user_id !== $oldAssignee) {
+            $assignee = User::on($connection)->find($task->assigned_user_id);
+            if ($assignee) {
+                $this->notifications->notify($assignee, 'task_assigned', "You were assigned a task: {$task->title}", $connection, "/tasks/{$task->id}");
+            }
+        }
+
+        return $task->fresh();
+    }
+
     /**
      * PRD Section 64 — Kanban-style status tracking. No transition
      * restrictions (like Candidate stages, unlike Job status) — any

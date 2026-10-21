@@ -15,7 +15,7 @@ class Candidate extends Model
 
     protected $fillable = [
         'company_id', 'name', 'email', 'normalized_email', 'phone',
-        'location', 'current_title', 'current_company', 'linkedin_url',
+        'location', 'address', 'current_title', 'current_company', 'linkedin_url',
         'resume_disk', 'resume_path', 'resume_original_name',
         'assigned_user_id', 'status',
     ];

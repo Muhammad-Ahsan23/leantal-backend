@@ -86,7 +86,7 @@ class JobController extends Controller
                     'total' => $paginator->total(),
                 ];
             } else {
-                $jobs = $query->get();
+                $jobs = $query->limit(500)->get(); // safety net: an unpaged call never pulls a whole table
             }
 
             // PRD Section 21 — "Applicant count" column. Single grouped

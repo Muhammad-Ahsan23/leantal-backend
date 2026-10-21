@@ -42,6 +42,11 @@ class Task extends Model
         return $this->belongsTo(Job::class);
     }
 
+    public function attachments()
+    {
+        return $this->hasMany(TaskAttachment::class)->orderBy('created_at');
+    }
+
     /**
      * PRD Section 62 — Recruiters only see tasks assigned to them;
      * Owner/HM see every task in the company (they created them).
