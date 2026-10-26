@@ -156,6 +156,16 @@ class CandidateService
                 'lock_version' => 1, // matches schema default (Section 98)
             ]);
 
+            // Added from a pipeline column's "+": put the application in THAT stage. Done with the same
+            // moveStage() a drag-and-drop uses, so Hired / Rejected set the status and dates correctly and
+            // the move is logged. Any failure rolls back the whole add (no half-added candidate).
+            $targetStageId = $data['stage_id'] ?? null;
+            if ($targetStageId && $targetStageId !== $appliedStage?->id) {
+                $application = app(ApplicationService::class)->moveStage(
+                    $application, $targetStageId, (int) $application->lock_version, null, $actor->id, $connection
+                );
+            }
+
             $this->logActivity($connection, $job->company_id, $actor->id, 'candidate.added_to_job', 'application', $application->id, [
                 'candidate_name' => $candidate->name,
                 'job_title' => $job->title,
@@ -240,6 +250,33 @@ class CandidateService
         $this->logActivity($connection, $candidate->company_id, $actor->id, 'candidate.updated', 'candidate', $candidate->id, [
             'candidate_name' => $candidate->name,
             'fields' => $changed,
+        ]);
+
+        $this->forgetCandidatesCache($candidate->company_id);
+
+        return $candidate->fresh();
+    }
+
+    /**
+     * Replaces the resume on an existing candidate. The new file is stored first; once the database
+     * row points at it the old file is removed (best effort - a failed delete never fails the request).
+     * Logged as candidate.updated with only the field name, like updateProfile().
+     */
+    public function replaceResume(Candidate $candidate, UploadedFile $file, User $actor, string $connection): Candidate
+    {
+        $meta = $this->resumeStorage->store($file, RegionResolver::regionForConnection($connection));
+        $oldDisk = $candidate->resume_disk;
+        $oldPath = $candidate->resume_path;
+
+        $candidate->update($meta);
+
+        if ($oldPath && ($oldDisk !== $meta['resume_disk'] || $oldPath !== $meta['resume_path'])) {
+            try { \Illuminate\Support\Facades\Storage::disk($oldDisk)->delete($oldPath); } catch (\Throwable $e) { report($e); }
+        }
+
+        $this->logActivity($connection, $candidate->company_id, $actor->id, 'candidate.updated', 'candidate', $candidate->id, [
+            'candidate_name' => $candidate->name,
+            'fields' => ['resume'],
         ]);
 
         $this->forgetCandidatesCache($candidate->company_id);

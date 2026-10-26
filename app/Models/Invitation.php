@@ -14,7 +14,7 @@ class Invitation extends Model
     const UPDATED_AT = null;
 
     protected $fillable = [
-        'company_id', 'email', 'role', 'invited_by', 'token', 'status', 'expires_at', 'accepted_at',
+        'company_id', 'name', 'email', 'role', 'invited_by', 'token', 'status', 'expires_at', 'accepted_at',
     ];
 
     protected $casts = [

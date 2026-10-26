@@ -14,6 +14,8 @@ class ConfirmImportRequest extends FormRequest
             'batch_id' => ['required', 'uuid'],
             // Optional (PRD Section 32: a candidate exists without any job). Omitted = add candidates only.
             'job_id' => ['nullable', 'uuid'],
+            // Optional, needs a job_id: land every imported candidate in this stage of the job instead of Applied.
+            'stage_id' => ['nullable', 'uuid'],
         ];
     }
 }

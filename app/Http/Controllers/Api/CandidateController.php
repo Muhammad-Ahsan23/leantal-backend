@@ -6,10 +6,12 @@ use App\Http\Controllers\Controller;
 use App\Http\Requests\Candidates\AssignCandidateRequest;
 use App\Http\Requests\Candidates\CreateCandidateRequest;
 use App\Http\Requests\Candidates\UpdateCandidateRequest;
+use App\Http\Requests\Candidates\ReplaceResumeRequest;
 use App\Http\Requests\Candidates\CreateNoteRequest;
 use App\Models\Candidate;
 use App\Models\Job;
 use App\Models\Note;
+use App\Models\PipelineStage;
 use App\Models\User;
 use App\Services\CandidateService;
 use App\Support\Roles;
@@ -53,6 +55,7 @@ class CandidateController extends Controller
             'stage' => ['nullable', 'string', 'max:100'],
             'job_id' => ['nullable', 'uuid'],
             'assigned_user_id' => ['nullable', 'string', 'max:64'],
+            'applied_since' => ['nullable', 'date'],
             'page' => ['nullable', 'integer', 'min:1'],
             'per_page' => ['nullable', 'integer', 'min:1', 'max:100'],
         ]);
@@ -116,6 +119,14 @@ class CandidateController extends Controller
             $query->where('assigned_user_id', $assignedTo);
         }
 
+        // "New applicants": added, or applied to a job, on/after this moment (the Dashboard's 7-day count).
+        if ($since = $request->query('applied_since')) {
+            $query->where(function ($q) use ($since) {
+                $q->where('created_at', '>=', $since)
+                    ->orWhereHas('applications', fn ($a) => $a->where('applied_at', '>=', $since));
+            });
+        }
+
         // id as a tie-breaker so candidates created in the same instant never swap pages.
         $query->orderByDesc('created_at')->orderBy('id');
 
@@ -137,7 +148,7 @@ class CandidateController extends Controller
                 'total' => $paginator->total(),
             ];
         } else {
-            $rows = $query->get();
+            $rows = $query->limit(500)->get(); // safety net: an unpaged call never pulls a whole table
         }
 
         $candidates = $rows->map(function (Candidate $c) use ($jobId, $stage) {
@@ -216,6 +227,10 @@ class CandidateController extends Controller
             return response()->json(['message' => 'Job not found.'], 404);
         }
 
+        if (!empty($data['stage_id']) && !PipelineStage::on($connection)->where('job_id', $job->id)->where('id', $data['stage_id'])->exists()) {
+            return response()->json(['message' => 'That stage does not belong to this job.'], 422);
+        }
+
         try {
             [$candidate, $application] = $this->candidates->addToJob($data, $job, $user, $connection, $request->file('resume'));
         } catch (\RuntimeException $e) {
@@ -251,6 +266,29 @@ class CandidateController extends Controller
         }
 
         $candidate = $this->candidates->updateProfile($candidate, $request->validated(), $user, $connection);
+
+        return response()->json(['candidate' => $candidate]);
+    }
+
+    /**
+     * Replaces the resume of an existing candidate (multipart, field "resume"). Same permission as editing
+     * the candidate. A multipart PATCH is not parsed by PHP, which is why this is its own POST route.
+     */
+    public function replaceResume(ReplaceResumeRequest $request, string $id)
+    {
+        $user = $request->user();
+        $connection = $user->getConnectionName();
+        $candidate = Candidate::on($connection)->find($id);
+
+        if (!$candidate) {
+            return response()->json(['message' => 'Candidate not found.'], 404);
+        }
+
+        if (!$user->can('update', $candidate)) {
+            return response()->json(['message' => 'You do not have permission to edit this candidate.'], 403);
+        }
+
+        $candidate = $this->candidates->replaceResume($candidate, $request->file('resume'), $user, $connection);
 
         return response()->json(['candidate' => $candidate]);
     }

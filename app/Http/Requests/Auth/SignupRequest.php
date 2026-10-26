@@ -55,6 +55,8 @@ class SignupRequest extends FormRequest
             // must not silently fall through to the US database.
             'country_code' => ['required', 'string', 'size:2', Rule::in(Countries::codes())],
             'captcha_token' => ['required', 'string'],
+            // The "I agree to the Terms and Privacy Policy" checkbox: must be ticked (true / 1 / "on" / "yes").
+            'terms_accepted' => ['accepted'],
         ];
     }
 
@@ -86,5 +88,12 @@ class SignupRequest extends FormRequest
                 );
             }
         });
+    }
+
+    public function messages(): array
+    {
+        return [
+            'terms_accepted.accepted' => 'You must agree to the Terms and Conditions to create an account.',
+        ];
     }
 }

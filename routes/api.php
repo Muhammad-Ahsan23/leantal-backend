@@ -99,6 +99,9 @@ Route::middleware('auth:sanctum')->group(function () {
     Route::get('/users/{id}/workload', [UserController::class, 'workload']);
     Route::delete('/users/{id}', [UserController::class, 'remove']);
     Route::patch('/users/{id}', [UserController::class, 'update']);
+    Route::get('/users/invitations', [UserController::class, 'invitations']);
+    Route::post('/users/invitations/{id}/resend', [UserController::class, 'resendInvitation'])->middleware('throttle:10,1');
+    Route::delete('/users/invitations/{id}', [UserController::class, 'revokeInvitation']);
 
     Route::get('/jobs', [JobController::class, 'index']);
     Route::post('/jobs', [JobController::class, 'store']);
@@ -136,6 +139,7 @@ Route::middleware('auth:sanctum')->group(function () {
     Route::post('/candidates/{id}/notes', [CandidateController::class, 'addNote']);
     Route::get('/candidates/{id}/resume-url', [CandidateController::class, 'resumeUrl']);
     Route::get('/candidates/{id}/activity', [CandidateController::class, 'activity']);
+    Route::post('/candidates/{id}/resume', [CandidateController::class, 'replaceResume']);
     Route::post('/candidates/{id}/resume', [CandidateController::class, 'replaceResume']);
 
     Route::get('/jobs/{jobId}/applications', [ApplicationController::class, 'index']);

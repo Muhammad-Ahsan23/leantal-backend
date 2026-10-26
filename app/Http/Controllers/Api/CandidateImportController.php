@@ -8,6 +8,7 @@ use App\Http\Requests\Candidates\DetectCsvHeadersRequest;
 use App\Http\Requests\Candidates\PreviewImportRequest;
 use App\Models\Candidate;
 use App\Models\Job;
+use App\Models\PipelineStage;
 use App\Services\CandidateImportService;
 
 class CandidateImportController extends Controller
@@ -75,8 +76,18 @@ class CandidateImportController extends Controller
             return response()->json(['message' => 'You do not have permission to add candidates.'], 403);
         }
 
+        $stageId = $data['stage_id'] ?? null;
+        if ($stageId) {
+            if (!$job) {
+                return response()->json(['message' => 'A stage can only be chosen together with a job.'], 422);
+            }
+            if (!PipelineStage::on($connection)->where('job_id', $job->id)->where('id', $stageId)->exists()) {
+                return response()->json(['message' => 'That stage does not belong to this job.'], 422);
+            }
+        }
+
         try {
-            $summary = $this->import->confirm($data['batch_id'], $job, $user, $connection);
+            $summary = $this->import->confirm($data['batch_id'], $job, $user, $connection, $stageId);
         } catch (\RuntimeException $e) {
             return response()->json(['message' => $e->getMessage()], 422);
         }

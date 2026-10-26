@@ -141,7 +141,7 @@ class CandidateImportService
      * @return array{created: int, skipped_duplicates: int, errors: array}
      * @throws \RuntimeException if the batch has expired or doesn't exist
      */
-    public function confirm(string $batchId, ?Job $job, User $actor, string $connection): array
+    public function confirm(string $batchId, ?Job $job, User $actor, string $connection, ?string $stageId = null): array
     {
         $validRows = Cache::get("candidate_import_batch:{$batchId}");
 
@@ -165,7 +165,8 @@ class CandidateImportService
 
             try {
                 if ($job) {
-                    $this->candidates->addToJob($data, $job, $actor, $connection);
+                    // $stageId (already checked by the controller) = land in that pipeline stage instead of Applied.
+                    $this->candidates->addToJob($stageId ? $data + ['stage_id' => $stageId] : $data, $job, $actor, $connection);
                 } else {
                     // No job chosen: candidate only (PRD Section 32). An email that already exists in
                     // this company is skipped and reported, same as a duplicate application below.

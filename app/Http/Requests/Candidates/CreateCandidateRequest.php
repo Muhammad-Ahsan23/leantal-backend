@@ -19,6 +19,9 @@ class CreateCandidateRequest extends FormRequest
             // application in that job's Applied stage; without one they are only added to the candidate list
             // and can be put into a job later ("Add to a job" on their profile).
             'job_id' => ['nullable', 'uuid'],
+            // OPTIONAL, only with a job_id: put the new application straight into this stage of the job
+            // (the "+" on a pipeline column). Omitted = the job's Applied stage, exactly as before.
+            'stage_id' => ['nullable', 'uuid'],
             'name' => ['required', 'string', 'max:255'],
             'email' => ['required', 'email', 'max:255'],
             'phone' => ['nullable', 'string', 'max:50'],

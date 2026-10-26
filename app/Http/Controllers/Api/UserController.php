@@ -92,7 +92,7 @@ class UserController extends Controller
             $unacceptedHere = Invitation::on($connection)
                 ->where('company_id', $actor->company_id)
                 ->where('email', $email)
-                ->whereIn('status', ['pending', 'expired'])
+                ->whereIn('status', ['pending', 'expired', 'revoked'])
                 ->exists();
 
             if ($hasAccount || !$unacceptedHere) {
@@ -126,12 +126,155 @@ class UserController extends Controller
                 ->update(['status' => 'revoked']);
         }
 
+        $failure = $this->dispatchInvitation($actor, $company, $email, trim((string) $request->input('name')), (string) $request->input('role'), $connection);
+        if ($failure) {
+            return $failure;
+        }
+
+        Log::info('User invited', ['email' => $email, 'company_id' => $actor->company_id, 'invited_by' => $actor->email]);
+
+        return response()->json(['message' => 'Invitation sent.'], 201);
+    }
+
+    /** Effective state of an invitation: a pending one whose link has run out is shown as expired. */
+    protected function invitationState(Invitation $i): string
+    {
+        if ($i->status === 'pending' && $i->expires_at && $i->expires_at->isPast()) {
+            return 'expired';
+        }
+
+        return $i->status;
+    }
+
+    /**
+     * Invitations that were sent but not accepted yet (Invite sent / Expired), for the Users tab.
+     * Accepted ones are real users by now, revoked ones are gone. Owner only, like inviting itself.
+     */
+    public function invitations(Request $request)
+    {
+        $actor = $request->user();
+
+        if (!$actor->can('invite', User::class)) {
+            return response()->json(['message' => 'Only the Owner can see invitations.'], 403);
+        }
+
+        $rows = Invitation::on($actor->getConnectionName())
+            ->where('company_id', $actor->company_id)
+            ->whereIn('status', ['pending', 'expired'])
+            ->with('inviter:id,name')
+            ->orderByDesc('created_at')
+            ->limit(200)
+            ->get();
+
+        return response()->json(['invitations' => $rows->map(fn (Invitation $i) => [
+            'id' => $i->id,
+            'name' => $i->name,
+            'email' => $i->email,
+            'role' => $i->role,
+            'status' => $this->invitationState($i), // 'pending' | 'expired'
+            'invited_by' => $i->inviter?->name,
+            'created_at' => $i->created_at,
+            'expires_at' => $i->expires_at,
+        ])->values()]);
+    }
+
+    /**
+     * Sends a fresh link for an invitation that is still waiting (or has expired). The old invitation is
+     * revoked, so only the newest link works. Same checks as inviting (seat limit, email delivery).
+     */
+    public function resendInvitation(Request $request, string $id)
+    {
+        $actor = $request->user();
+
+        if (!$actor->can('invite', User::class)) {
+            return response()->json(['message' => 'Only the Owner can invite users.'], 403);
+        }
+
+        $connection = $actor->getConnectionName();
+        $old = Invitation::on($connection)->where('company_id', $actor->company_id)->find($id);
+
+        if (!$old || !in_array($old->status, ['pending', 'expired'], true)) {
+            return response()->json(['message' => 'This invitation can no longer be re-sent.'], 404);
+        }
+
+        try {
+            FrontendUrl::to('/accept-invite');
+        } catch (\RuntimeException $e) {
+            Log::error('Invitation not re-sent: '.$e->getMessage(), ['invited_by' => $actor->email]);
+
+            return response()->json(['message' => "We couldn't create the invitation link. Please contact support."], 500);
+        }
+
+        // The person may have gotten an account in the meantime (accepted on another invitation).
+        if (User::on($connection)->where('email', $old->email)->exists()) {
+            return response()->json(['message' => 'This email is already associated with an account.'], 422);
+        }
+
+        $company = Company::on($connection)->find($actor->company_id);
+
+        // The old invitation is replaced by the new one, so it must not be counted twice for the seat limit.
+        $seatLimit = $company->seatLimit();
+        if ($seatLimit !== null && $old->status === 'expired') {
+            $usedSeats = User::on($connection)->where('company_id', $actor->company_id)->where('status', 'active')->count()
+                + Invitation::on($connection)->where('company_id', $actor->company_id)->where('status', 'pending')
+                    ->where('expires_at', '>', now())->count();
+
+            if ($usedSeats >= $seatLimit) {
+                return response()->json([
+                    'message' => "You've reached your plan's user limit ({$seatLimit}). Upgrade to invite more users.",
+                ], 422);
+            }
+        }
+
+        $old->forceFill(['status' => 'revoked'])->save();
+
+        $failure = $this->dispatchInvitation($actor, $company, $old->email, (string) $old->name, $old->role, $connection);
+        if ($failure) {
+            // Nothing could be sent: put the old one back as it was, so the Owner still sees it and can retry.
+            $old->forceFill(['status' => $old->expires_at && $old->expires_at->isPast() ? 'expired' : 'pending'])->save();
+
+            return $failure;
+        }
+
+        return response()->json(['message' => 'Invitation re-sent.']);
+    }
+
+    /** Cancels an invitation that was not accepted: its link stops working. Owner only. */
+    public function revokeInvitation(Request $request, string $id)
+    {
+        $actor = $request->user();
+
+        if (!$actor->can('invite', User::class)) {
+            return response()->json(['message' => 'Only the Owner can cancel invitations.'], 403);
+        }
+
+        $invitation = Invitation::on($actor->getConnectionName())->where('company_id', $actor->company_id)->find($id);
+
+        if (!$invitation || !in_array($invitation->status, ['pending', 'expired'], true)) {
+            return response()->json(['message' => 'Invitation not found.'], 404);
+        }
+
+        $invitation->forceFill(['status' => 'revoked'])->save();
+
+        Log::info('Invitation revoked', ['email' => $invitation->email, 'company_id' => $actor->company_id, 'by' => $actor->email]);
+
+        return response()->json(['message' => 'Invitation cancelled.']);
+    }
+
+    /**
+     * Creates the invitation row, reserves the email -> region mapping and emails the link. Shared by
+     * invite() and resendInvitation(). Returns null on success, or the error response to hand back
+     * (a failed email revokes the invitation again, so nothing half-made is left behind).
+     */
+    protected function dispatchInvitation(User $actor, Company $company, string $email, string $name, string $roleKey, string $connection): ?\Illuminate\Http\JsonResponse
+    {
         $rawToken = Str::random(64);
 
         $invitation = Invitation::on($connection)->create([
             'company_id' => $actor->company_id,
             'email' => $email,
-            'role' => $request->input('role'),
+            'role' => $roleKey,
+            'name' => $name !== '' ? $name : null,
             'invited_by' => $actor->id,
             'token' => Hash::make($rawToken),
             'status' => 'pending',
@@ -146,12 +289,11 @@ class UserController extends Controller
         // PRD Section 88 — the Owner invites "by name, email, role". The name is carried in the link so the
         // invitee's "Full name" box is already filled in (they can still change it). It is only a convenience:
         // the account's name is whatever the invitee submits on the accept-invite form.
-        $name = trim((string) $request->input('name'));
         $inviteUrl = FrontendUrl::to('/accept-invite', array_filter(
             ['email' => $email, 'token' => $rawToken, 'name' => $name],
             fn ($v) => $v !== ''
         ));
-        $role = str_replace('_', ' ', $request->input('role'));
+        $role = str_replace('_', ' ', $roleKey);
 
         try {
             Mail::raw(
@@ -169,9 +311,7 @@ class UserController extends Controller
             return response()->json(['message' => "We couldn't send the invitation email right now. Please try again in a few minutes."], 422);
         }
 
-        Log::info('User invited', ['email' => $email, 'company_id' => $actor->company_id, 'invited_by' => $actor->email]);
-
-        return response()->json(['message' => 'Invitation sent.'], 201);
+        return null;
     }
 
     /**
