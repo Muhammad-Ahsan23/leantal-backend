@@ -5,6 +5,7 @@ namespace App\Http\Controllers\Api\SuperAdmin;
 use App\Http\Controllers\Controller;
 use App\Http\Requests\SuperAdmin\ImpersonateUserRequest;
 use App\Models\User;
+use App\Services\NotificationService;
 use App\Services\RegionResolver;
 use App\Services\SuperAdminAuditService;
 use Illuminate\Http\Request;
@@ -14,7 +15,7 @@ class SuperAdminImpersonationController extends Controller
 {
     protected const ACCESS_TOKEN_MINUTES = 15; // same lifetime as a normal customer access token
 
-    public function __construct(protected SuperAdminAuditService $audit) {}
+    public function __construct(protected SuperAdminAuditService $audit, protected NotificationService $notifications) {}
 
     /**
      * PRD Section 80 — "Super Admin can Log in as user for customer
@@ -40,6 +41,14 @@ class SuperAdminImpersonationController extends Controller
             return response()->json(['message' => 'Company not found.'], 404);
         }
 
+        $admin = $request->attributes->get('super_admin');
+        $data = $request->validated();
+        $full = ($data['mode'] ?? 'read_only') === 'full';
+
+        if ($full && !$admin->hasPermission('companies.impersonate_full')) {
+            return response()->json(['message' => 'You do not have permission to impersonate with edit access.'], 403);
+        }
+
         $connection = RegionResolver::connectionFor($region);
 
         $targetUser = User::on($connection)->where('company_id', $companyId)->find($userId);
@@ -47,25 +56,34 @@ class SuperAdminImpersonationController extends Controller
             return response()->json(['message' => 'User not found in that company.'], 404);
         }
 
-        $tokenResult = $targetUser->createToken('impersonation', ['impersonation'], now()->addMinutes(self::ACCESS_TOKEN_MINUTES));
+        // 'read-only' is enforced by RestrictImpersonation; without it the session can edit (full mode).
+        $tokenResult = $targetUser->createToken('impersonation', $full ? ['impersonation'] : ['impersonation', 'read-only'], now()->addMinutes(self::ACCESS_TOKEN_MINUTES));
         $tokenResult->accessToken->forceFill(['region' => $region])->save();
-
-        $admin = $request->attributes->get('super_admin');
-        $reason = $request->validated()['reason'];
 
         // token_id is how ImpersonationController::exit() (customer-side,
         // running under the impersonation token itself) finds its way
         // back to THIS specific audit entry to record the end time.
         $this->audit->log($admin, 'impersonate_start', $request->ip(), 'user', $userId, [
-            'reason' => $reason,
+            'reason' => $data['reason'],
+            'ticket' => $data['ticket'],
+            'mode' => $full ? 'full' : 'read_only',
             'company_id' => $companyId,
             'token_id' => $tokenResult->accessToken->id,
             'started_at' => now()->toIso8601String(),
         ]);
 
+        // Transparency: the company's owner(s) always see that LeanTal support accessed the account (mandatory notification).
+        User::on($connection)->where('company_id', $companyId)->where('role', 'owner')->get()->each(fn ($owner) => $this->notifications->notify(
+            $owner,
+            'support_access',
+            'LeanTal support accessed your account for '.$targetUser->name.' ('.($full ? 'with edit access' : 'read-only').'), support ticket '.$data['ticket'].'.',
+            $connection,
+        ));
+
         return response()->json([
             'access_token' => $tokenResult->plainTextToken,
             'expires_in' => self::ACCESS_TOKEN_MINUTES * 60,
+            'mode' => $full ? 'full' : 'read_only',
             'impersonating' => [
                 'id' => $targetUser->id,
                 'name' => $targetUser->name,

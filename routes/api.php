@@ -9,13 +9,19 @@ use App\Http\Controllers\Api\SuperAdmin\SuperAdminAuthController;
 use App\Http\Controllers\Api\SuperAdmin\SuperAdminDashboardController;
 use App\Http\Controllers\Api\SuperAdmin\SuperAdminCompanyController;
 use App\Http\Controllers\Api\SuperAdmin\SuperAdminAuditController;
+use App\Http\Controllers\Api\SuperAdmin\SuperAdminAnalyticsController;
+use App\Http\Controllers\Api\SuperAdmin\SuperAdminBillingController;
+use App\Http\Controllers\Api\SuperAdmin\SuperAdminCompanyDataController;
 use App\Http\Controllers\Api\SuperAdmin\SuperAdminImpersonationController;
+use App\Http\Controllers\Api\SuperAdmin\SuperAdminUserController;
 use App\Http\Controllers\Api\SuperAdmin\SuperAdminDebuggingController;
 use App\Http\Controllers\Api\SuperAdmin\SuperAdminSystemHealthController;
 use App\Http\Controllers\Api\SuperAdmin\SuperAdminSearchController;
 use App\Http\Controllers\Api\SuperAdmin\SuperAdminFeatureFlagController;
 use App\Http\Controllers\Api\SuperAdmin\SuperAdminBlogController;
 use App\Http\Controllers\Api\SuperAdmin\SuperAdminNotificationController;
+use App\Http\Controllers\Api\SuperAdmin\SuperAdminRoleController;
+use App\Http\Controllers\Api\SuperAdmin\SuperAdminAdminController;
 use App\Http\Controllers\Api\ImpersonationController;
 use App\Http\Controllers\Api\ApplicationQuestionController;
 use App\Http\Controllers\Api\Auth\LoginController;
@@ -140,7 +146,6 @@ Route::middleware('auth:sanctum')->group(function () {
     Route::get('/candidates/{id}/resume-url', [CandidateController::class, 'resumeUrl']);
     Route::get('/candidates/{id}/activity', [CandidateController::class, 'activity']);
     Route::post('/candidates/{id}/resume', [CandidateController::class, 'replaceResume']);
-    Route::post('/candidates/{id}/resume', [CandidateController::class, 'replaceResume']);
 
     Route::get('/jobs/{jobId}/applications', [ApplicationController::class, 'index']);
     Route::get('/applications/{id}', [ApplicationController::class, 'show']);
@@ -240,29 +245,64 @@ Route::prefix('super-admin')->group(function () {
     // Protected — EnsureSuperAdmin middleware
     Route::middleware('super-admin')->group(function () {
         Route::post('/auth/logout', [SuperAdminAuthController::class, 'logout']);
-        Route::get('/dashboard', [SuperAdminDashboardController::class, 'index']);
-        Route::get('/companies', [SuperAdminCompanyController::class, 'index']);
-        Route::get('/companies/{companyId}', [SuperAdminCompanyController::class, 'show']);
-        Route::post('/companies/{companyId}/suspend', [SuperAdminCompanyController::class, 'suspend']);
-        Route::post('/companies/{companyId}/reactivate', [SuperAdminCompanyController::class, 'reactivate']);
-        Route::post('/companies/{companyId}/extend-trial', [SuperAdminCompanyController::class, 'extendTrial']);
-        Route::post('/companies/{companyId}/users/{userId}/impersonate', [SuperAdminImpersonationController::class, 'start']);
-        Route::get('/audit-log', [SuperAdminAuditController::class, 'index']);
-        Route::get('/debugging', [SuperAdminDebuggingController::class, 'index']);
-        Route::post('/debugging/{eventId}/retry', [SuperAdminDebuggingController::class, 'retry']);
-        Route::get('/system-health', [SuperAdminSystemHealthController::class, 'index']);
-        Route::get('/search', [SuperAdminSearchController::class, 'index']);
+        Route::get('/me', [SuperAdminAuthController::class, 'me']);
+        Route::post('/auth/step-up', [SuperAdminAuthController::class, 'stepUp']);
 
-        Route::get('/feature-flags', [SuperAdminFeatureFlagController::class, 'index']);
-        Route::post('/feature-flags', [SuperAdminFeatureFlagController::class, 'save']);
-        Route::delete('/feature-flags/{id}', [SuperAdminFeatureFlagController::class, 'destroy']);
+        // Every route below needs a specific permission (config/admin_permissions.php).
+        Route::get('/dashboard', [SuperAdminDashboardController::class, 'index'])->middleware('admin.can:dashboard.view');
 
-        Route::get('/blog', [SuperAdminBlogController::class, 'index']);
-        Route::get('/blog/{id}', [SuperAdminBlogController::class, 'show']);
-        Route::post('/blog', [SuperAdminBlogController::class, 'store']);
-        Route::patch('/blog/{id}', [SuperAdminBlogController::class, 'update']);
-        Route::delete('/blog/{id}', [SuperAdminBlogController::class, 'destroy']);
+        Route::get('/companies', [SuperAdminCompanyController::class, 'index'])->middleware('admin.can:companies.view');
+        Route::get('/companies/{companyId}', [SuperAdminCompanyController::class, 'show'])->middleware('admin.can:companies.view');
+        Route::post('/companies/{companyId}/suspend', [SuperAdminCompanyController::class, 'suspend'])->middleware(['admin.can:companies.suspend', 'admin.fresh']);
+        Route::post('/companies/{companyId}/reactivate', [SuperAdminCompanyController::class, 'reactivate'])->middleware('admin.can:companies.reactivate');
+        Route::post('/companies/{companyId}/extend-trial', [SuperAdminCompanyController::class, 'extendTrial'])->middleware('admin.can:companies.extend_trial');
+        Route::post('/companies/{companyId}/users/{userId}/impersonate', [SuperAdminImpersonationController::class, 'start'])->middleware(['admin.can:companies.impersonate', 'admin.fresh']);
 
-        Route::post('/notifications/broadcast', [SuperAdminNotificationController::class, 'broadcast']);
+        // Business control: billing & limits, GDPR export/deletion, users across companies, growth numbers.
+        Route::get('/companies/{companyId}/billing', [SuperAdminBillingController::class, 'show'])->middleware('admin.can:billing.view');
+        Route::post('/companies/{companyId}/plan', [SuperAdminBillingController::class, 'changePlan'])->middleware(['admin.can:billing.change_plan', 'admin.fresh']);
+        Route::put('/companies/{companyId}/limits', [SuperAdminBillingController::class, 'setLimits'])->middleware(['admin.can:billing.override_limits', 'admin.fresh']);
+        Route::post('/companies/{companyId}/billing-notes', [SuperAdminBillingController::class, 'addNote'])->middleware('admin.can:billing.notes');
+        Route::get('/companies/{companyId}/export', [SuperAdminCompanyDataController::class, 'export'])->middleware(['admin.can:companies.export', 'admin.fresh']);
+        Route::delete('/companies/{companyId}', [SuperAdminCompanyDataController::class, 'destroy'])->middleware(['admin.can:companies.delete', 'admin.fresh']);
+        Route::get('/users', [SuperAdminUserController::class, 'index'])->middleware('admin.can:users.view');
+        Route::post('/companies/{companyId}/users/{userId}/status', [SuperAdminUserController::class, 'setStatus'])->middleware(['admin.can:users.deactivate', 'admin.fresh']);
+        Route::post('/companies/{companyId}/users/{userId}/password-reset', [SuperAdminUserController::class, 'sendPasswordReset'])->middleware(['admin.can:users.reset_password', 'admin.fresh']);
+        Route::get('/analytics', [SuperAdminAnalyticsController::class, 'index'])->middleware('admin.can:analytics.view');
+
+        Route::get('/audit-log', [SuperAdminAuditController::class, 'index'])->middleware('admin.can:audit_log.view');
+        Route::get('/audit-log/export', [SuperAdminAuditController::class, 'export'])->middleware(['admin.can:audit_log.export', 'admin.fresh']);
+        Route::get('/debugging', [SuperAdminDebuggingController::class, 'index'])->middleware('admin.can:debugging.view');
+        Route::post('/debugging/{eventId}/retry', [SuperAdminDebuggingController::class, 'retry'])->middleware('admin.can:debugging.retry');
+        Route::get('/system-health', [SuperAdminSystemHealthController::class, 'index'])->middleware('admin.can:system_health.view');
+        Route::get('/search', [SuperAdminSearchController::class, 'index'])->middleware('admin.can:search.view');
+
+        Route::get('/feature-flags', [SuperAdminFeatureFlagController::class, 'index'])->middleware('admin.can:feature_flags.view');
+        Route::post('/feature-flags', [SuperAdminFeatureFlagController::class, 'save'])->middleware('admin.can:feature_flags.manage');
+        Route::delete('/feature-flags/{id}', [SuperAdminFeatureFlagController::class, 'destroy'])->middleware('admin.can:feature_flags.manage');
+
+        Route::get('/blog', [SuperAdminBlogController::class, 'index'])->middleware('admin.can:blog.view');
+        Route::get('/blog/{id}', [SuperAdminBlogController::class, 'show'])->middleware('admin.can:blog.view');
+        Route::post('/blog', [SuperAdminBlogController::class, 'store'])->middleware('admin.can:blog.create');
+        Route::patch('/blog/{id}', [SuperAdminBlogController::class, 'update'])->middleware('admin.can:blog.edit');
+        Route::delete('/blog/{id}', [SuperAdminBlogController::class, 'destroy'])->middleware('admin.can:blog.delete');
+
+        Route::post('/notifications/broadcast', [SuperAdminNotificationController::class, 'broadcast'])->middleware(['admin.can:notifications.broadcast', 'admin.fresh']);
+
+        // Owner-only: who the admins are and what each role may do. Changes also need a fresh authenticator code.
+        Route::middleware('admin.owner')->group(function () {
+            Route::get('/roles', [SuperAdminRoleController::class, 'index']);
+            Route::get('/admins', [SuperAdminAdminController::class, 'index']);
+
+            Route::middleware('admin.fresh')->group(function () {
+                Route::post('/roles', [SuperAdminRoleController::class, 'store']);
+                Route::patch('/roles/{id}', [SuperAdminRoleController::class, 'update']);
+                Route::delete('/roles/{id}', [SuperAdminRoleController::class, 'destroy']);
+
+                Route::post('/admins', [SuperAdminAdminController::class, 'store']);
+                Route::patch('/admins/{id}', [SuperAdminAdminController::class, 'update']);
+                Route::post('/admins/{id}/reset-mfa', [SuperAdminAdminController::class, 'resetMfa']);
+            });
+        });
     });
 });

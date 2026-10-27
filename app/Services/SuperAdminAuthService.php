@@ -23,6 +23,8 @@ use Illuminate\Support\Str;
 class SuperAdminAuthService
 {
     protected const TOKEN_LIFETIME_MINUTES = 30;
+    // How long an authenticator code keeps sensitive actions unlocked (see EnsureRecentMfa).
+    protected const STEP_UP_MINUTES = 5;
 
     public function __construct(protected TotpService $totp) {}
 
@@ -35,6 +37,10 @@ class SuperAdminAuthService
 
         if (!$admin || !Hash::check($password, $admin->password_hash)) {
             throw new \RuntimeException('Invalid credentials.');
+        }
+
+        if ($admin->disabled_at) {
+            throw new \RuntimeException('This account has been disabled. Please contact an Owner.');
         }
 
         return $admin;
@@ -131,6 +137,7 @@ class SuperAdminAuthService
             'super_admin_id' => $admin->id,
             'token_hash' => hash('sha256', $rawToken),
             'expires_at' => now()->addMinutes(self::TOKEN_LIFETIME_MINUTES),
+            'step_up_until' => now()->addMinutes(self::STEP_UP_MINUTES), // the login itself just proved the second factor
         ]);
 
         return $rawToken;
@@ -146,7 +153,39 @@ class SuperAdminAuthService
             return null;
         }
 
-        return SuperAdmin::find($tokenRecord->super_admin_id);
+        $admin = SuperAdmin::with('role')->find($tokenRecord->super_admin_id);
+
+        if (!$admin || $admin->disabled_at) {
+            return null;
+        }
+
+        return $admin->setRelation('currentToken', $tokenRecord);
+    }
+
+    /**
+     * Unlocks sensitive actions for this session for a few minutes after a valid authenticator code.
+     *
+     * @throws \RuntimeException on a wrong code
+     */
+    public function stepUp(SuperAdmin $admin, string $code): void
+    {
+        if (!$admin->mfa_secret || !$this->totp->verify($admin->mfa_secret, $code)) {
+            throw new \RuntimeException('Invalid authentication code.');
+        }
+
+        $admin->currentToken->update(['step_up_until' => now()->addMinutes(self::STEP_UP_MINUTES)]);
+    }
+
+    /** Removes the authenticator and signs the admin out everywhere; they set up a new one at the next login. */
+    public function resetMfa(SuperAdmin $admin): void
+    {
+        $admin->forceFill(['mfa_secret' => null, 'mfa_enabled_at' => null])->save();
+        $this->revokeAllTokens($admin);
+    }
+
+    public function revokeAllTokens(SuperAdmin $admin): void
+    {
+        SuperAdminToken::where('super_admin_id', $admin->id)->delete();
     }
 
     public function revokeToken(string $rawToken): void

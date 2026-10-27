@@ -99,7 +99,7 @@ class CompanyPurgeService
      *         (billing cannot be cancelled). Any other Throwable means the database
      *         step failed and, because it is one transaction, nothing was deleted.
      */
-    public function purge(Company $company, string $connection): void
+    public function purge(Company $company, string $connection, bool $billingCheckedByAdmin = false): void
     {
         @set_time_limit(300);
 
@@ -107,7 +107,7 @@ class CompanyPurgeService
         $region = str_replace('pgsql_', '', $connection);
 
         // 1. Billing — abort before touching any data if it cannot be cancelled.
-        $this->cancelBilling($company);
+        $this->cancelBilling($company, $billingCheckedByAdmin);
         $creemCustomerId = $company->creem_customer_id;
 
         // 2. Read what we will no longer be able to read afterwards.
@@ -151,7 +151,8 @@ class CompanyPurgeService
         ]);
     }
 
-    protected function cancelBilling(Company $company): void
+    /** $billingCheckedByAdmin: a Super Admin confirmed there is nothing to cancel (e.g. a complimentary plan). */
+    protected function cancelBilling(Company $company, bool $billingCheckedByAdmin = false): void
     {
         if ($company->creem_subscription_id) {
             $this->creem->cancelSubscription($company->creem_subscription_id);
@@ -161,7 +162,7 @@ class CompanyPurgeService
 
         // A paying company whose subscription id was never stored cannot be cancelled
         // from here. Refuse rather than delete it and leave the customer being billed.
-        if (in_array($company->subscription_status, ['active', 'past_due'], true)) {
+        if (!$billingCheckedByAdmin && in_array($company->subscription_status, ['active', 'past_due'], true)) {
             throw new \RuntimeException(
                 "We couldn't find the billing subscription for this company, so it can't be cancelled automatically. "
                     . 'Please contact support to cancel it first, then delete the company.'

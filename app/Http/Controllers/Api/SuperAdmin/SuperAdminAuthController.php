@@ -113,6 +113,51 @@ class SuperAdminAuthController extends Controller
         return response()->json(['message' => 'Logged out.']);
     }
 
+    /** Step-up: re-enter an authenticator code to unlock sensitive actions for a few minutes (EnsureRecentMfa). */
+    public function stepUp(Request $request)
+    {
+        $data = $request->validate(['code' => ['required', 'digits:6']]);
+        $admin = $request->attributes->get('super_admin');
+        $key = 'sa-step-up:'.$admin->id;
+
+        if (RateLimiter::tooManyAttempts($key, self::MAX_PER_EMAIL_AND_IP)) {
+            $wait = RateLimiter::availableIn($key);
+
+            return response()->json(['message' => 'Too many failed attempts. Please try again in '.max(1, (int) ceil($wait / 60)).' minute(s).'], 429)
+                ->header('Retry-After', (string) $wait);
+        }
+
+        try {
+            $this->auth->stepUp($admin, $data['code']);
+        } catch (\RuntimeException $e) {
+            RateLimiter::hit($key, self::DECAY_SECONDS);
+            $this->audit->log($admin, 'step_up_failed', $request->ip());
+
+            return response()->json(['message' => $e->getMessage()], 422);
+        }
+
+        RateLimiter::clear($key);
+        $this->audit->log($admin, 'step_up_verified', $request->ip());
+
+        return response()->json(['message' => 'Verified.', 'valid_until' => $admin->currentToken->step_up_until->toIso8601String()]);
+    }
+
+    /** The signed-in admin and what they are allowed to do — the frontend builds its menu and buttons from this. */
+    public function me(Request $request)
+    {
+        $admin = $request->attributes->get('super_admin');
+
+        return response()->json([
+            'admin' => [
+                'id' => $admin->id,
+                'name' => $admin->name,
+                'email' => $admin->email,
+                'role' => $admin->role ? ['id' => $admin->role->id, 'name' => $admin->role->name, 'is_owner' => $admin->role->is_owner] : null,
+            ],
+            'permissions' => $admin->permissions(),
+        ]);
+    }
+
     /** @return array<string, int> rate-limiter key => max failures */
     protected function limits(Request $request, string $email): array
     {

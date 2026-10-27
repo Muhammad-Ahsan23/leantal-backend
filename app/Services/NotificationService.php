@@ -21,8 +21,7 @@ use App\Models\User;
  */
 class NotificationService
 {
-    protected const MANDATORY_TYPES = ['password_changed', 'new_login_detected', 'account_suspended'];
-
+    protected const MANDATORY_TYPES = ['password_changed', 'new_login_detected', 'account_suspended', 'support_access'];
     public function notify(User $recipient, string $type, string $message, string $connection, ?string $link = null): ?Notification
     {
         if (!in_array($type, self::MANDATORY_TYPES, true)) {

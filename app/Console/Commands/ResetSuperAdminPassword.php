@@ -3,7 +3,7 @@
 namespace App\Console\Commands;
 
 use App\Models\SuperAdmin;
-use App\Models\SuperAdminToken;
+use App\Services\SuperAdminAuthService;
 use Illuminate\Console\Command;
 use Illuminate\Support\Facades\Hash;
 
@@ -18,7 +18,7 @@ class ResetSuperAdminPassword extends Command
 
     protected $description = 'Set a new password for a Super Admin (forgotten password). Internal use only — never exposed via API.';
 
-    public function handle(): int
+    public function handle(SuperAdminAuthService $auth): int
     {
         $email = strtolower(trim($this->argument('email')));
         $admin = SuperAdmin::where('email', $email)->first();
@@ -44,7 +44,7 @@ class ResetSuperAdminPassword extends Command
         }
 
         $admin->forceFill(['password_hash' => Hash::make($password)])->save();
-        SuperAdminToken::where('super_admin_id', $admin->id)->delete(); // sign out every open session
+        $auth->revokeAllTokens($admin);
 
         $this->info("Password updated for {$admin->email}. All sessions were signed out. MFA was not changed.");
 

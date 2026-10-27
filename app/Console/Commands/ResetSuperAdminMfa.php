@@ -3,7 +3,7 @@
 namespace App\Console\Commands;
 
 use App\Models\SuperAdmin;
-use App\Models\SuperAdminToken;
+use App\Services\SuperAdminAuthService;
 use Illuminate\Console\Command;
 
 /**
@@ -17,7 +17,7 @@ class ResetSuperAdminMfa extends Command
 
     protected $description = 'Reset MFA for a Super Admin (lost device). Internal use only — never exposed via API.';
 
-    public function handle(): int
+    public function handle(SuperAdminAuthService $auth): int
     {
         $email = strtolower(trim($this->argument('email')));
         $admin = SuperAdmin::where('email', $email)->first();
@@ -27,8 +27,7 @@ class ResetSuperAdminMfa extends Command
             return self::FAILURE;
         }
 
-        $admin->forceFill(['mfa_secret' => null, 'mfa_enabled_at' => null])->save();
-        SuperAdminToken::where('super_admin_id', $admin->id)->delete(); // sign out every open session
+        $auth->resetMfa($admin);
 
         $this->info("MFA reset for {$admin->email}. They can now use \"First time logging in? Set up two-factor authentication\" on the login page.");
 

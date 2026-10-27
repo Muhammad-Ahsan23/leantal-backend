@@ -2,6 +2,7 @@
 
 namespace App\Console\Commands;
 
+use App\Models\AdminRole;
 use App\Models\SuperAdmin;
 use Illuminate\Console\Command;
 use Illuminate\Support\Facades\Hash;
@@ -31,6 +32,7 @@ class CreateSuperAdmin extends Command
             'name' => $this->argument('name'),
             'email' => $email,
             'password_hash' => Hash::make($this->argument('password')),
+            'role_id' => AdminRole::where('is_owner', true)->value('id'), // created on the server = the Owner
         ]);
 
         $this->info("Super Admin created: {$admin->email} (id: {$admin->id})");

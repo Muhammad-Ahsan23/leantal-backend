@@ -13,7 +13,7 @@ class SuperAdminToken extends Model
 
     public $timestamps = false;
 
-    protected $fillable = ['super_admin_id', 'token_hash', 'expires_at'];
+    protected $fillable = ['super_admin_id', 'token_hash', 'expires_at', 'step_up_until'];
 
-    protected $casts = ['expires_at' => 'datetime'];
+    protected $casts = ['expires_at' => 'datetime', 'step_up_until' => 'datetime'];
 }
