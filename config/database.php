@@ -19,6 +19,7 @@ return [
             'prefix' => '',
             'schema' => 'public',
             'sslmode' => 'prefer',
+
         ],
 
         'pgsql_eu' => [
@@ -77,6 +78,8 @@ return [
             'prefix' => '',
             'schema' => 'public',
             'sslmode' => 'prefer',
+            'timezone' => 'UTC',
+
         ],
 
     ],

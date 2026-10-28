@@ -21,6 +21,7 @@ return [
         'impersonate_full' => 'Impersonate users with edit access',
         'export' => 'Export all company data',
         'delete' => 'Permanently delete companies',
+        'notes' => 'Add support notes',
     ]],
     'billing' => ['label' => 'Billing & Plans', 'actions' => [
         'view' => 'View plans, usage and payment events',
@@ -61,6 +62,11 @@ return [
         'delete' => 'Delete posts',
     ]],
     'notifications' => ['label' => 'Notifications', 'actions' => [
-        'broadcast' => 'Send platform broadcasts',
+        'broadcast' => 'Send platform broadcasts and view their history',
+    ]],
+    'platform' => ['label' => 'Announcements & Maintenance', 'actions' => [
+        'view' => 'View the announcement and maintenance status',
+        'announce' => 'Publish and clear the customer announcement banner',
+        'maintenance' => 'Turn maintenance mode on and off',
     ]],
 ];

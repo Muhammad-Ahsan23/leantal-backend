@@ -4,6 +4,7 @@ namespace App\Http\Controllers\Api\SuperAdmin;
 
 use App\Http\Controllers\Controller;
 use App\Http\Requests\SuperAdmin\PlatformBroadcastRequest;
+use App\Models\SuperAdminAuditLog;
 use App\Services\NotificationService;
 use App\Services\RegionResolver;
 use App\Services\SuperAdminAuditService;
@@ -72,8 +73,35 @@ class SuperAdminNotificationController extends Controller
             'target' => $data['target'],
             'message' => $data['message'],
             'recipients_notified' => $totalSent,
+            // Who it was aimed at, so the history can show it (company ids / number of users picked).
+            'company_ids' => $data['target'] === 'companies' ? $data['company_ids'] : null,
+            'users_targeted' => $data['target'] === 'users' ? count($data['users']) : null,
         ]);
 
         return response()->json(['message' => "Notification sent to {$totalSent} user(s)."]);
+    }
+
+    /**
+     * Every broadcast ever sent, newest first. Read from the audit log (which already records each one and cannot be
+     * edited), so there is no second copy to keep in step. 20 per page.
+     */
+    public function history()
+    {
+        $page = SuperAdminAuditLog::with('superAdmin:id,name')
+            ->where('action', 'platform_notification_sent')->latest('created_at')->latest('id')->paginate(20); // id (time-ordered uuid) breaks ties inside the same second
+
+        return response()->json([
+            'broadcasts' => $page->getCollection()->map(fn (SuperAdminAuditLog $log) => [
+                'id' => $log->id,
+                'sent_at' => $log->created_at,
+                'sent_by' => $log->superAdmin?->name,
+                'target' => $log->metadata['target'] ?? null,
+                'message' => $log->metadata['message'] ?? '',
+                'recipients' => $log->metadata['recipients_notified'] ?? 0,
+                'company_ids' => $log->metadata['company_ids'] ?? null,
+                'users_targeted' => $log->metadata['users_targeted'] ?? null,
+            ])->values(),
+            'meta' => ['current_page' => $page->currentPage(), 'last_page' => $page->lastPage(), 'per_page' => $page->perPage(), 'total' => $page->total()],
+        ]);
     }
 }

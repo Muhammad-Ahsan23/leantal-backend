@@ -22,6 +22,11 @@ use App\Http\Controllers\Api\SuperAdmin\SuperAdminBlogController;
 use App\Http\Controllers\Api\SuperAdmin\SuperAdminNotificationController;
 use App\Http\Controllers\Api\SuperAdmin\SuperAdminRoleController;
 use App\Http\Controllers\Api\SuperAdmin\SuperAdminAdminController;
+use App\Http\Controllers\Api\SuperAdmin\SuperAdminAlertsController;
+use App\Http\Controllers\Api\SuperAdmin\SuperAdminPlatformController;
+use App\Http\Controllers\Api\SuperAdmin\SuperAdminRegionHealthController;
+use App\Http\Controllers\Api\SuperAdmin\SuperAdminSupportNoteController;
+use App\Http\Controllers\Api\PlatformStatusController;
 use App\Http\Controllers\Api\ImpersonationController;
 use App\Http\Controllers\Api\ApplicationQuestionController;
 use App\Http\Controllers\Api\Auth\LoginController;
@@ -88,6 +93,9 @@ Route::get('/oauth/google/callback', [OAuthConnectController::class, 'googleCall
 // Public — Microsoft redirects the browser here directly after consent.
 Route::get('/oauth/microsoft/callback', [OAuthConnectController::class, 'microsoftCallback']);
 
+// Public — banner + maintenance state for the app (cached for a few seconds)
+Route::get('/platform-status', [PlatformStatusController::class, 'show'])->middleware('throttle:60,1');
+
 // Public — candidate-facing careers page, completely unauthenticated
 Route::get('/public/careers/{companySlug}', [PublicCareersController::class, 'index']);
 Route::get('/public/careers/{companySlug}/jobs/{jobId}', [PublicCareersController::class, 'showJob']);
@@ -102,12 +110,12 @@ Route::middleware('auth:sanctum')->group(function () {
 
     Route::get('/users', [UserController::class, 'index']);
     Route::post('/users/invite', [UserController::class, 'invite']);
-    Route::get('/users/{id}/workload', [UserController::class, 'workload']);
-    Route::delete('/users/{id}', [UserController::class, 'remove']);
-    Route::patch('/users/{id}', [UserController::class, 'update']);
     Route::get('/users/invitations', [UserController::class, 'invitations']);
     Route::post('/users/invitations/{id}/resend', [UserController::class, 'resendInvitation'])->middleware('throttle:10,1');
     Route::delete('/users/invitations/{id}', [UserController::class, 'revokeInvitation']);
+    Route::get('/users/{id}/workload', [UserController::class, 'workload']);
+    Route::delete('/users/{id}', [UserController::class, 'remove']);
+    Route::patch('/users/{id}', [UserController::class, 'update']);
 
     Route::get('/jobs', [JobController::class, 'index']);
     Route::post('/jobs', [JobController::class, 'store']);
@@ -137,6 +145,7 @@ Route::middleware('auth:sanctum')->group(function () {
     Route::post('/candidates/import/confirm', [CandidateImportController::class, 'confirm']);
     Route::get('/candidates/{id}', [CandidateController::class, 'show']);
     Route::patch('/candidates/{id}', [CandidateController::class, 'update']);
+    Route::post('/candidates/{id}/resume', [CandidateController::class, 'replaceResume']);
     Route::patch('/candidates/{id}/archive', [CandidateController::class, 'archive']);
     Route::patch('/candidates/{id}/restore', [CandidateController::class, 'restore']);
     Route::delete('/candidates/{id}', [CandidateController::class, 'destroy']);
@@ -145,7 +154,6 @@ Route::middleware('auth:sanctum')->group(function () {
     Route::post('/candidates/{id}/notes', [CandidateController::class, 'addNote']);
     Route::get('/candidates/{id}/resume-url', [CandidateController::class, 'resumeUrl']);
     Route::get('/candidates/{id}/activity', [CandidateController::class, 'activity']);
-    Route::post('/candidates/{id}/resume', [CandidateController::class, 'replaceResume']);
 
     Route::get('/jobs/{jobId}/applications', [ApplicationController::class, 'index']);
     Route::get('/applications/{id}', [ApplicationController::class, 'show']);
@@ -156,9 +164,9 @@ Route::middleware('auth:sanctum')->group(function () {
     Route::get('/tasks', [TaskController::class, 'index']);
     Route::post('/tasks', [TaskController::class, 'store']);
     Route::get('/tasks/{id}', [TaskController::class, 'show']);
+    Route::patch('/tasks/{id}', [TaskController::class, 'update']);
     Route::patch('/tasks/{id}/status', [TaskController::class, 'updateStatus']);
     Route::delete('/tasks/{id}', [TaskController::class, 'destroy']);
-    Route::patch('/tasks/{id}', [TaskController::class, 'update']);
     Route::post('/tasks/{id}/attachments', [TaskAttachmentController::class, 'store']);
     Route::get('/tasks/{id}/attachments/{attachmentId}/url', [TaskAttachmentController::class, 'url']);
     Route::delete('/tasks/{id}/attachments/{attachmentId}', [TaskAttachmentController::class, 'destroy']);
@@ -288,6 +296,20 @@ Route::prefix('super-admin')->group(function () {
         Route::delete('/blog/{id}', [SuperAdminBlogController::class, 'destroy'])->middleware('admin.can:blog.delete');
 
         Route::post('/notifications/broadcast', [SuperAdminNotificationController::class, 'broadcast'])->middleware(['admin.can:notifications.broadcast', 'admin.fresh']);
+        Route::get('/notifications/history', [SuperAdminNotificationController::class, 'history'])->middleware('admin.can:notifications.broadcast');
+
+        Route::get('/platform', [SuperAdminPlatformController::class, 'show'])->middleware('admin.can:platform.view');
+        Route::put('/platform/announcement', [SuperAdminPlatformController::class, 'publishAnnouncement'])->middleware(['admin.can:platform.announce', 'admin.fresh']);
+        Route::delete('/platform/announcement', [SuperAdminPlatformController::class, 'clearAnnouncement'])->middleware('admin.can:platform.announce');
+        Route::put('/platform/maintenance', [SuperAdminPlatformController::class, 'enableMaintenance'])->middleware(['admin.can:platform.maintenance', 'admin.fresh']);
+        Route::delete('/platform/maintenance', [SuperAdminPlatformController::class, 'disableMaintenance'])->middleware('admin.can:platform.maintenance');
+
+        Route::get('/companies/{companyId}/support-notes', [SuperAdminSupportNoteController::class, 'index'])->middleware('admin.can:companies.view');
+        Route::post('/companies/{companyId}/support-notes', [SuperAdminSupportNoteController::class, 'store'])->middleware('admin.can:companies.notes');
+
+        Route::get('/alerts', [SuperAdminAlertsController::class, 'index'])->middleware('admin.can:system_health.view');
+        Route::get('/region-health', [SuperAdminRegionHealthController::class, 'index'])->middleware('admin.can:system_health.view');
+        Route::get('/region-health/consistency', [SuperAdminRegionHealthController::class, 'consistency'])->middleware('admin.can:system_health.view');
 
         // Owner-only: who the admins are and what each role may do. Changes also need a fresh authenticator code.
         Route::middleware('admin.owner')->group(function () {
