@@ -54,6 +54,12 @@ class PlatformStatusService
         return ['message' => $raw['message'], 'level' => $raw['level'] ?? 'info', 'expires_at' => $expiresAt];
     }
 
+    /** Any other setting stored in platform_settings (e.g. the admin IP allowlist), cached like the rest; [] when unset. */
+    public function get(string $key): array
+    {
+        return $this->settings()[$key] ?? [];
+    }
+
     public function put(string $key, array $value): void
     {
         DB::connection('admin_db')->table('platform_settings')->updateOrInsert(

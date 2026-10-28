@@ -25,6 +25,7 @@ use App\Http\Controllers\Api\SuperAdmin\SuperAdminAdminController;
 use App\Http\Controllers\Api\SuperAdmin\SuperAdminAlertsController;
 use App\Http\Controllers\Api\SuperAdmin\SuperAdminPlatformController;
 use App\Http\Controllers\Api\SuperAdmin\SuperAdminRegionHealthController;
+use App\Http\Controllers\Api\SuperAdmin\SuperAdminSecurityController;
 use App\Http\Controllers\Api\SuperAdmin\SuperAdminSupportNoteController;
 use App\Http\Controllers\Api\PlatformStatusController;
 use App\Http\Controllers\Api\ImpersonationController;
@@ -244,7 +245,7 @@ Route::post('/refresh-token', [LoginController::class, 'refresh'])->middleware('
 // system (EnsureSuperAdmin middleware, not auth:sanctum) — see
 // bootstrap/app.php for the middleware alias registration.
 // ============================================================
-Route::prefix('super-admin')->group(function () {
+Route::prefix('super-admin')->middleware(\App\Http\Middleware\EnforceAdminIpAllowlist::class)->group(function () {
     // Public — no admin session exists yet at this point
     Route::post('/auth/mfa/enroll', [SuperAdminAuthController::class, 'startMfaEnrollment']);
     Route::post('/auth/mfa/confirm', [SuperAdminAuthController::class, 'confirmMfaEnrollment']);
@@ -315,11 +316,14 @@ Route::prefix('super-admin')->group(function () {
         Route::middleware('admin.owner')->group(function () {
             Route::get('/roles', [SuperAdminRoleController::class, 'index']);
             Route::get('/admins', [SuperAdminAdminController::class, 'index']);
+            Route::get('/security/ip-allowlist', [SuperAdminSecurityController::class, 'show']);
 
             Route::middleware('admin.fresh')->group(function () {
                 Route::post('/roles', [SuperAdminRoleController::class, 'store']);
                 Route::patch('/roles/{id}', [SuperAdminRoleController::class, 'update']);
                 Route::delete('/roles/{id}', [SuperAdminRoleController::class, 'destroy']);
+
+                Route::put('/security/ip-allowlist', [SuperAdminSecurityController::class, 'update']);
 
                 Route::post('/admins', [SuperAdminAdminController::class, 'store']);
                 Route::patch('/admins/{id}', [SuperAdminAdminController::class, 'update']);

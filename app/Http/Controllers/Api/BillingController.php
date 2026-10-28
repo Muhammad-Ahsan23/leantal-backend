@@ -8,6 +8,7 @@ use App\Models\Company;
 use App\Models\Job;
 use App\Models\User;
 use App\Services\CreemService;
+use App\Support\FrontendUrl;
 use Illuminate\Http\Request;
 
 class BillingController extends Controller
@@ -86,7 +87,8 @@ class BillingController extends Controller
                 return response()->json(['message' => 'Plan changed successfully.', 'subscription' => $result]);
             }
 
-            $successUrl = config('services.frontend_url').'/settings/billing?checkout=success';
+            // FrontendUrl refuses to build a link when FRONTEND_URL is missing (RuntimeException -> 502 below) instead of sending Creem a relative URL.
+            $successUrl = FrontendUrl::to('/settings/billing', ['checkout' => 'success']);
             $checkoutUrl = $this->creem->createCheckout($company, $data['plan'], $data['interval'], $successUrl);
 
             return response()->json(['checkout_url' => $checkoutUrl]);

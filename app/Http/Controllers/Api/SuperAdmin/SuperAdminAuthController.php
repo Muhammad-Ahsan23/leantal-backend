@@ -7,7 +7,9 @@ use App\Http\Requests\SuperAdmin\ConfirmMfaEnrollmentRequest;
 use App\Http\Requests\SuperAdmin\StartMfaEnrollmentRequest;
 use App\Http\Requests\SuperAdmin\SuperAdminLoginRequest;
 use App\Models\SuperAdmin;
+use App\Services\AdminIpAllowlistService;
 use App\Services\SuperAdminAuditService;
+use App\Services\SuperAdminLoginAlertService;
 use App\Services\SuperAdminAuthService;
 use Illuminate\Http\JsonResponse;
 use Illuminate\Http\Request;
@@ -29,6 +31,8 @@ class SuperAdminAuthController extends Controller
     public function __construct(
         protected SuperAdminAuthService $auth,
         protected SuperAdminAuditService $audit,
+        protected SuperAdminLoginAlertService $loginAlerts,
+        protected AdminIpAllowlistService $ips,
     ) {}
 
     /**
@@ -74,8 +78,10 @@ class SuperAdminAuthController extends Controller
         $this->clearFailures($request, $data['email']);
 
         $admin = SuperAdmin::where('email', strtolower(trim($data['email'])))->first();
-        $this->audit->log($admin, 'mfa_enrolled', $request->ip());
-        $this->audit->log($admin, 'login', $request->ip());
+        $ip = $this->ips->clientIp($request); // the real visitor address (also behind a trusted proxy)
+        $this->audit->log($admin, 'mfa_enrolled', $ip);
+        $this->loginAlerts->onLogin($admin, $ip, $request->userAgent());
+        $this->audit->log($admin, 'login', $ip);
 
         return response()->json(['token' => $token]);
     }
@@ -97,7 +103,9 @@ class SuperAdminAuthController extends Controller
         $this->clearFailures($request, $data['email']);
 
         $admin = SuperAdmin::where('email', strtolower(trim($data['email'])))->first();
-        $this->audit->log($admin, 'login', $request->ip());
+        $ip = $this->ips->clientIp($request); // the real visitor address (also behind a trusted proxy)
+        $this->loginAlerts->onLogin($admin, $ip, $request->userAgent()); // must run before this login is audited
+        $this->audit->log($admin, 'login', $ip);
 
         return response()->json(['token' => $token]);
     }
