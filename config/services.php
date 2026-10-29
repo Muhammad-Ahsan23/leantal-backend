@@ -64,6 +64,20 @@ return [
         'pubsub_topic' => env('GOOGLE_PUBSUB_TOPIC'),
         'pubsub_webhook_secret' => env('GOOGLE_PUBSUB_WEBHOOK_SECRET'),
     ],
+    // Google reCAPTCHA v2 secret (CaptchaService). Must belong to the SAME key pair as the site key in the frontend
+    // (components/common/Recaptcha.jsx), and that key must allow the frontend's domain in the reCAPTCHA admin console.
+    'recaptcha' => [
+        'secret' => env('RECAPTCHA_SECRET_KEY'),
+    ],
+
+    // Zoom (User-managed OAuth app from marketplace.zoom.us): every interviewer connects their OWN Zoom account;
+    // the meeting is created on it. Scopes to enable on the app: meeting:write:meeting, meeting:update:meeting,
+    // meeting:delete:meeting, user:read:user (or the classic meeting:write, user:read).
+    'zoom' => [
+        'client_id' => env('ZOOM_CLIENT_ID'),
+        'client_secret' => env('ZOOM_CLIENT_SECRET'),
+        'redirect_uri' => env('ZOOM_REDIRECT_URI'),
+    ],
     'microsoft' => [
         'client_id' => env('MICROSOFT_CLIENT_ID'),
         'client_secret' => env('MICROSOFT_CLIENT_SECRET'),

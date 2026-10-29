@@ -10,6 +10,7 @@ use App\Services\GmailWatchService;
 use App\Services\GoogleCalendarOAuthService;
 use App\Services\MicrosoftOAuthService;
 use App\Services\MicrosoftSubscriptionService;
+use App\Services\ZoomOAuthService;
 use Illuminate\Http\Request;
 use Illuminate\Support\Facades\Log;
 
@@ -20,6 +21,7 @@ class OAuthConnectionController extends Controller
         protected GmailWatchService $gmailWatch,
         protected MicrosoftOAuthService $microsoft,
         protected MicrosoftSubscriptionService $microsoftSubscription,
+        protected ZoomOAuthService $zoom,
     ) {}
 
     /**
@@ -87,6 +89,8 @@ class OAuthConnectionController extends Controller
             $this->disconnectGoogle($token, $connection);
         } elseif ($provider === 'microsoft') {
             $this->disconnectMicrosoft($token, $connection);
+        } elseif ($provider === 'zoom') {
+            $this->disconnectZoom($token);
         }
 
         // BUG FIX: $token->update(['access_token' => null, ...]) was
@@ -148,5 +152,15 @@ class OAuthConnectionController extends Controller
         // actually asks for — "deletes stored access/refresh tokens"
         // is about OUR storage, which this satisfies.
         MicrosoftSubscriptionState::on($connection)->where('user_id', $token->user_id)->delete();
+    }
+
+    /** Revokes the grant at Zoom (best-effort); the caller then wipes our stored copy. */
+    protected function disconnectZoom(OAuthToken $token): void
+    {
+        try {
+            $this->zoom->revokeToken($token->access_token ?? $token->refresh_token);
+        } catch (\RuntimeException $e) {
+            Log::warning('Zoom token revocation failed on disconnect', ['user_id' => $token->user_id, 'message' => $e->getMessage()]);
+        }
     }
 }

@@ -17,6 +17,8 @@ class InterviewService
     public function __construct(
         protected GoogleCalendarService $googleCalendar,
         protected MicrosoftGraphCalendarService $microsoftCalendar,
+        protected ZoomMeetingService $zoomMeetings,
+        protected InterviewInviteService $invites,
         protected NotificationService $notifications,
         protected SystemEventLogger $systemEvents,
     ) {}
@@ -29,10 +31,6 @@ class InterviewService
      */
     public function assertCanCreateMeetingLink(string $provider, User $organizer, User $actor, string $connection): void
     {
-        if ($provider === 'zoom') {
-            throw new \RuntimeException("Zoom links can't be created automatically yet. Please choose Google Meet.");
-        }
-
         ['oauth_provider' => $oauthProvider] = $this->resolveProvider($provider);
         if (!$oauthProvider) {
             return;
@@ -48,11 +46,12 @@ class InterviewService
             return;
         }
 
-        $service = $provider === 'microsoft_teams' ? 'Microsoft' : 'Google';
-        $where = $provider === 'microsoft_teams' ? 'Teams' : 'Meet';
+        $service = ['microsoft_teams' => 'Microsoft', 'zoom' => 'Zoom'][$provider] ?? 'Google';
+        $where = ['microsoft_teams' => 'Teams', 'zoom' => 'Zoom'][$provider] ?? 'Meet';
+        $created = $provider === 'zoom' ? 'The Zoom meeting is created on your account' : "The {$where} link and the candidate's invitation are created from your calendar";
 
         throw new \RuntimeException($organizer->id === $actor->id
-            ? "Connect your {$service} account first (Settings → Integrations). The {$where} link and the candidate's invitation are created from your calendar."
+            ? "Connect your {$service} account first (Settings → Integrations). {$created}."
             : "{$organizer->name} hasn't connected {$service} yet. Ask them to connect it in Settings → Integrations, or choose an organizer who has.");
     }
 
@@ -81,7 +80,7 @@ class InterviewService
         ]);
 
         $provider = $data['provider'] ?? null;
-        if (in_array($provider, ['google_meet', 'microsoft_teams'], true)) {
+        if (in_array($provider, ['google_meet', 'microsoft_teams', 'zoom'], true)) {
             $this->trySyncCreate($interview, $data, $provider, $connection);
         }
 
@@ -103,7 +102,7 @@ class InterviewService
         $interview->update($data);
         $interview = $interview->fresh();
 
-        if (in_array($interview->provider, ['google_meet', 'microsoft_teams'], true) && $interview->calendar_event_id) {
+        if (in_array($interview->provider, ['google_meet', 'microsoft_teams', 'zoom'], true) && $interview->calendar_event_id) {
             $this->trySyncUpdate($interview, $connection);
         }
 
@@ -128,7 +127,7 @@ class InterviewService
      */
     public function cancel(Interview $interview, User $actor, string $connection): void
     {
-        if (in_array($interview->provider, ['google_meet', 'microsoft_teams'], true) && $interview->calendar_event_id) {
+        if (in_array($interview->provider, ['google_meet', 'microsoft_teams', 'zoom'], true) && $interview->calendar_event_id) {
             $this->trySyncDelete($interview, $connection);
         }
 
@@ -149,6 +148,7 @@ class InterviewService
         return match ($interviewProvider) {
             'google_meet' => ['oauth_provider' => 'google', 'service' => $this->googleCalendar],
             'microsoft_teams' => ['oauth_provider' => 'microsoft', 'service' => $this->microsoftCalendar],
+            'zoom' => ['oauth_provider' => 'zoom', 'service' => $this->zoomMeetings],
             default => ['oauth_provider' => null, 'service' => null],
         };
     }
@@ -186,6 +186,10 @@ class InterviewService
                 'calendar_event_id' => $result['event_id'],
                 'meeting_url' => $result['meeting_url'] ?? $interview->meeting_url,
             ]);
+
+            if ($provider === 'zoom') {
+                $this->invites->send($interview->fresh(), 'REQUEST', $connection); // Zoom sends no invite of its own
+            }
         } catch (\RuntimeException $e) {
             Log::warning("{$provider} calendar sync failed on interview create — interview kept without a link", [
                 'interview_id' => $interview->id,
@@ -225,6 +229,10 @@ class InterviewService
                 'start_time' => $interview->start_time->toIso8601String(),
                 'end_time' => $interview->end_time->toIso8601String(),
             ]);
+
+            if ($interview->provider === 'zoom') {
+                $this->invites->send($interview, 'REQUEST', $connection); // same UID + newer SEQUENCE: updates the candidate's calendar entry
+            }
         } catch (\RuntimeException $e) {
             Log::warning("{$interview->provider} calendar sync failed on interview reschedule", [
                 'interview_id' => $interview->id,
@@ -258,6 +266,10 @@ class InterviewService
 
         try {
             $service->deleteEvent($token, $interview->calendar_event_id);
+
+            if ($interview->provider === 'zoom') {
+                $this->invites->send($interview, 'CANCEL', $connection);
+            }
         } catch (\RuntimeException $e) {
             Log::warning("{$interview->provider} calendar sync failed on interview cancel", [
                 'interview_id' => $interview->id,

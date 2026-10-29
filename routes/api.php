@@ -93,6 +93,8 @@ Route::get('/oauth/google/callback', [OAuthConnectController::class, 'googleCall
 
 // Public — Microsoft redirects the browser here directly after consent.
 Route::get('/oauth/microsoft/callback', [OAuthConnectController::class, 'microsoftCallback']);
+// Public — Zoom redirects the browser here after consent.
+Route::get('/oauth/zoom/callback', [OAuthConnectController::class, 'zoomCallback']);
 
 // Public — banner + maintenance state for the app (cached for a few seconds)
 Route::get('/platform-status', [PlatformStatusController::class, 'show'])->middleware('throttle:60,1');
@@ -185,6 +187,7 @@ Route::middleware('auth:sanctum')->group(function () {
     // frontend using the active impersonation token itself.
     Route::post('/exit-impersonation', [ImpersonationController::class, 'exit']);
     Route::get('/oauth/microsoft/connect', [OAuthConnectController::class, 'connectMicrosoft']);
+    Route::get('/oauth/zoom/connect', [OAuthConnectController::class, 'connectZoom']);
 
     Route::get('/email-templates', [EmailTemplateController::class, 'index']);
     Route::post('/email-templates', [EmailTemplateController::class, 'store']);

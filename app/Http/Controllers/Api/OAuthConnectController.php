@@ -8,6 +8,7 @@ use App\Services\GmailWatchService;
 use App\Services\GoogleCalendarOAuthService;
 use App\Services\MicrosoftOAuthService;
 use App\Services\MicrosoftSubscriptionService;
+use App\Services\ZoomOAuthService;
 use App\Support\ActivityLogger;
 use Illuminate\Http\Request;
 use Illuminate\Support\Facades\Cache;
@@ -21,6 +22,7 @@ class OAuthConnectController extends Controller
         protected GmailWatchService $gmailWatch,
         protected MicrosoftOAuthService $microsoft,
         protected MicrosoftSubscriptionService $microsoftSubscription,
+        protected ZoomOAuthService $zoom,
     ) {}
 
     /**
@@ -206,5 +208,86 @@ class OAuthConnectController extends Controller
         }
 
         return redirect("{$frontendUrl}/settings?tab=integrations&connected=true&provider=microsoft");
+    }
+
+    /** Zoom connect — same state-token pattern as Google/Microsoft. */
+    public function connectZoom(Request $request)
+    {
+        if (!$this->zoom->isConfigured()) {
+            return response()->json(['message' => 'Zoom is not set up on this server yet.'], 503);
+        }
+
+        $user = $request->user();
+        $state = Str::random(40);
+
+        Cache::put("oauth_state:{$state}", [
+            'user_id' => $user->id,
+            'connection' => $user->getConnectionName(),
+        ], now()->addMinutes(10));
+
+        return response()->json(['auth_url' => $this->zoom->buildAuthUrl($state)]);
+    }
+
+    public function zoomCallback(Request $request)
+    {
+        $frontendUrl = config('services.frontend_url');
+        $code = $request->query('code');
+        $state = $request->query('state');
+
+        if ($request->query('error')) {
+            Log::info('Zoom OAuth: user denied or cancelled', ['error' => $request->query('error')]);
+            return redirect("{$frontendUrl}/settings?tab=integrations&connected=false&reason=denied");
+        }
+
+        if (!$code || !$state) {
+            return redirect("{$frontendUrl}/settings?tab=integrations&connected=false&reason=malformed");
+        }
+
+        $stateData = Cache::pull("oauth_state:{$state}");
+
+        if (!$stateData) {
+            Log::warning('Zoom OAuth callback: unknown or expired state', ['state' => $state]);
+            return redirect("{$frontendUrl}/settings?tab=integrations&connected=false&reason=expired");
+        }
+
+        try {
+            $tokens = $this->zoom->exchangeCodeForTokens($code);
+        } catch (\RuntimeException $e) {
+            Log::error('Zoom OAuth token exchange failed', ['message' => $e->getMessage()]);
+            return redirect("{$frontendUrl}/settings?tab=integrations&connected=false&reason=exchange_failed");
+        }
+
+        $connection = $stateData['connection'];
+
+        $providerEmail = null;
+        try {
+            $providerEmail = $this->zoom->getUserEmail($tokens['access_token']);
+        } catch (\RuntimeException $e) {
+            Log::warning('Failed to fetch connected Zoom account email', ['message' => $e->getMessage()]);
+        }
+
+        $token = OAuthToken::on($connection)->updateOrCreate(
+            ['user_id' => $stateData['user_id'], 'provider' => 'zoom'],
+            [
+                'provider_email' => $providerEmail,
+                'access_token' => $tokens['access_token'],
+                'refresh_token' => $tokens['refresh_token'] ?? null,
+                'scope' => $tokens['scope'] ?? null,
+                'connected_at' => now(),
+                'expires_at' => now()->addSeconds($tokens['expires_in'] ?? 3600),
+                'disconnected_at' => null,
+            ]
+        );
+
+        $connectedUser = \App\Models\User::on($connection)->find($stateData['user_id']);
+        if ($connectedUser) {
+            ActivityLogger::log($connection, $connectedUser->company_id, $connectedUser->id, 'integration.connected', 'integration', (string) ($token->id ?? $connectedUser->id), [
+                'provider' => 'zoom',
+                'provider_label' => 'Zoom',
+                'provider_email' => $providerEmail,
+            ]);
+        }
+
+        return redirect("{$frontendUrl}/settings?tab=integrations&connected=true&provider=zoom");
     }
 }
