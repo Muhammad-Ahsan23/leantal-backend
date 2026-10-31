@@ -219,7 +219,20 @@ class PublicApplicationService
             }
         }
 
+        $source = $this->cleanSource($data['source'] ?? null);
+        if ($source !== null) {
+            $out['source'] = $source;
+        }
+
         return $out ?: null;
+    }
+
+    /** Lower-case slug (letters, digits, _ -), max 30 chars; anything else is dropped. */
+    protected function cleanSource(mixed $value): ?string
+    {
+        $slug = preg_replace('/[^a-z0-9_-]/', '', strtolower(trim((string) $value)));
+
+        return $slug === '' ? null : substr($slug, 0, 30);
     }
 
     /** A string or a list of strings -> a clean list with blanks removed. */

@@ -11,13 +11,36 @@ class SubmitApplicationRequest extends FormRequest
         return true; // public endpoint — anyone can apply
     }
 
+    /**
+     * Candidates type "linkedin.com/in/name" without https://. Add it instead of rejecting the application
+     * (same idea as UpdateCandidateRequest).
+     */
+    protected function prepareForValidation(): void
+    {
+        $linkedin = $this->input('linkedin_url');
+        if (is_string($linkedin)) {
+            $linkedin = trim($linkedin);
+            if ($linkedin !== '' && !preg_match('#^[a-z][a-z0-9+.-]*://#i', $linkedin)) {
+                $linkedin = 'https://'.ltrim($linkedin, '/');
+            }
+            $this->merge(['linkedin_url' => $linkedin]);
+        }
+    }
+
+    public function messages(): array
+    {
+        return ['linkedin_url.url' => 'Please enter a valid LinkedIn URL, e.g. https://linkedin.com/in/yourname.'];
+    }
+
     public function rules(): array
     {
         return [
             'name' => ['required', 'string', 'max:255'],
             'email' => ['required', 'email', 'max:255'],
             'phone' => ['nullable', 'string', 'max:50'],
-            'linkedin_url' => ['nullable', 'url', 'max:255'],
+            // Where the candidate came from (?source=google / a job-board feed). Stored on the application, never trusted.
+            'source' => ['nullable', 'string', 'max:50'],
+            'linkedin_url' => ['nullable', 'url:http,https', 'max:255'],
             // Resume is optional by default; a job can make it Required or switch it off
             // (checked in PublicApplicationService::validateProfileFields).
             'resume' => ['nullable', 'file', 'mimes:pdf,doc,docx', 'max:10240'], // 10MB

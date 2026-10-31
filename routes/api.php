@@ -54,6 +54,7 @@ use App\Http\Controllers\Api\OAuthConnectionController;
 use App\Http\Controllers\Api\PermissionsController;
 use App\Http\Controllers\Api\PipelineStageController;
 use App\Http\Controllers\Api\Public\PublicCareersController;
+use App\Http\Controllers\Api\Public\PublicJobFeedController;
 use App\Http\Controllers\Api\TaskController;
 use App\Http\Controllers\Api\TaskAttachmentController;
 use App\Http\Controllers\Api\UserController;
@@ -100,6 +101,10 @@ Route::get('/oauth/zoom/callback', [OAuthConnectController::class, 'zoomCallback
 Route::get('/platform-status', [PlatformStatusController::class, 'show'])->middleware('throttle:60,1');
 
 // Public — candidate-facing careers page, completely unauthenticated
+// Public — XML for job boards / search engines. feed.xml?source=<board> tags each job link so applications show where they came from.
+Route::get('/public/sitemap.xml', [PublicJobFeedController::class, 'platformSitemap']);
+Route::get('/public/careers/{companySlug}/feed.xml', [PublicJobFeedController::class, 'feed']);
+Route::get('/public/careers/{companySlug}/sitemap.xml', [PublicJobFeedController::class, 'companySitemap']);
 Route::get('/public/careers/{companySlug}', [PublicCareersController::class, 'index']);
 Route::get('/public/careers/{companySlug}/jobs/{jobId}', [PublicCareersController::class, 'showJob']);
 Route::post('/public/careers/{companySlug}/jobs/{jobId}/apply', [PublicCareersController::class, 'apply']);

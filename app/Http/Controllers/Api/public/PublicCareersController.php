@@ -138,7 +138,7 @@ class PublicCareersController extends Controller
         return response()->json([
             'job' => $job,
             'questions' => $questions,
-            'structured_data' => $this->structuredData->build($job, $companySlug, $companyModel->name ?? ''),
+            'structured_data' => $this->structuredData->build($job, $companySlug, $companyModel->name ?? '', $companyModel->country_code ?? null, $this->safeWebsite($companyModel->website ?? null)),
             'canonical_url' => $canonicalUrl,
         ]);
     }

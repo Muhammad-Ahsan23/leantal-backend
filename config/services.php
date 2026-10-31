@@ -36,6 +36,14 @@ return [
     ],
 
     'frontend_url' => env('FRONTEND_URL'),
+    // Public careers pages live on their own host (jobs.leantal.com/{slug}/jobs/{id}). When set, every public job URL
+    // (Google JobPosting, sitemap, XML feed, Indexing API) uses it. Leave empty to fall back to FRONTEND_URL/careers/...
+    'careers_url' => env('CAREERS_URL'),
+    // Google Indexing API (free, 200 publish requests/day): path to a service-account JSON key. The service account
+    // must be an Owner of the careers host in Google Search Console. Empty = feature off.
+    'google_indexing' => [
+        'credentials_path' => env('GOOGLE_INDEXING_CREDENTIALS_PATH'),
+    ],
 
     // Tawk.to live chat: API key from Tawk dashboard > Administration > Property Settings (used for Secure mode).
     'tawk' => [

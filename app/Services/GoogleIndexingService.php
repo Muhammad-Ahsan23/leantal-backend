@@ -2,6 +2,7 @@
 
 namespace App\Services;
 
+use Illuminate\Support\Facades\Cache;
 use Illuminate\Support\Facades\Http;
 use Illuminate\Support\Facades\Log;
 
@@ -28,18 +29,33 @@ class GoogleIndexingService
             return; // not configured — no-op, never breaks the calling flow
         }
 
+        // Google's default quota is 200 publish requests per day (resets at midnight US Pacific). Stay under it.
+        $quotaKey = 'google_indexing:'.now('America/Los_Angeles')->toDateString();
+        Cache::add($quotaKey, 0, now()->addDay());
+        if (Cache::increment($quotaKey) > 190) {
+            Log::warning('Google Indexing API daily quota reached, notification skipped', ['url' => $url]);
+
+            return;
+        }
+
         try {
-            $accessToken = $this->getAccessToken($credentialsPath);
+            $accessToken = Cache::remember('google_indexing:token', 3000, fn () => $this->getAccessToken($credentialsPath));
 
             if (!$accessToken) {
+                Cache::forget('google_indexing:token');
+
                 return;
             }
 
-            Http::withToken($accessToken)
+            $response = Http::withToken($accessToken)
                 ->post('https://indexing.googleapis.com/v3/urlNotifications:publish', [
                     'url' => $url,
                     'type' => $type, // URL_UPDATED | URL_DELETED
                 ]);
+
+            if (!$response->successful()) {
+                Log::warning('Google Indexing API rejected a notification', ['status' => $response->status(), 'body' => $response->body(), 'url' => $url]);
+            }
         } catch (\Throwable $e) {
             // Never let a Google API hiccup break job publishing/closing.
             Log::warning('Google Indexing API notify failed', ['error' => $e->getMessage(), 'url' => $url]);
