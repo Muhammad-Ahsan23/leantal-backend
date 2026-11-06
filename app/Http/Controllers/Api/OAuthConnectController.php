@@ -81,6 +81,24 @@ class OAuthConnectController extends Controller
             return redirect("{$frontendUrl}/settings?tab=integrations&connected=false&reason=exchange_failed");
         }
 
+        // Google lets the user untick individual permissions on the consent screen. If any
+        // permission LeanTal needs is missing, do not store a half-working connection.
+        $granted = preg_split('/\s+/', trim((string) ($tokens['scope'] ?? ''))) ?: [];
+        $required = [
+            'https://www.googleapis.com/auth/calendar.events',
+            'https://www.googleapis.com/auth/gmail.send',
+            'https://www.googleapis.com/auth/gmail.readonly',
+        ];
+        if (array_diff($required, $granted)) {
+            Log::info('Google OAuth: required permissions missing', ['missing' => array_values(array_diff($required, $granted))]);
+            try {
+                $this->google->revokeToken($tokens['refresh_token'] ?? $tokens['access_token']);
+            } catch (\Throwable $e) {
+                Log::warning('Google OAuth: revoke after partial consent failed', ['message' => $e->getMessage()]);
+            }
+            return redirect("{$frontendUrl}/settings?tab=integrations&connected=false&reason=missing_permissions");
+        }
+
         $connection = $stateData['connection'];
 
         $providerEmail = null;

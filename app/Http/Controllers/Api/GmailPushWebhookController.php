@@ -8,6 +8,7 @@ use App\Services\GmailSyncService;
 use App\Services\RegionResolver;
 use App\Services\RegionRoutingRepository;
 use Illuminate\Http\Request;
+use Illuminate\Support\Facades\DB;
 use Illuminate\Support\Facades\Log;
 
 class GmailPushWebhookController extends Controller
@@ -52,20 +53,41 @@ class GmailPushWebhookController extends Controller
         // Pub/Sub identifies the mailbox by email address, not our
         // internal user_id — search across all 3 regions since we
         // don't know which one this connection lives in yet.
+        // The same mailbox can be connected more than once (several users, or an old
+        // connection next to a new one), so every live connection is synced — a dead
+        // one must never block the working one.
         foreach (['pgsql_us', 'pgsql_eu', 'pgsql_uk'] as $connection) {
-            $token = OAuthToken::on($connection)
+            $tokens = OAuthToken::on($connection)
                 ->where('provider', 'google')
                 ->where('provider_email', $emailAddress)
                 ->whereNull('disconnected_at')
-                ->first();
+                ->get();
 
-            if ($token) {
+            foreach ($tokens as $token) {
                 try {
                     $this->sync->syncNewMessages($token, $connection);
                 } catch (\RuntimeException $e) {
                     Log::warning('Gmail sync failed', ['email' => $emailAddress, 'message' => $e->getMessage()]);
+
+                    // invalid_grant = Google no longer honours this refresh token (revoked, or a
+                    // Testing-mode token that expired). It can never work again, so mark the
+                    // connection as disconnected: the user sees "Not connected" and can reconnect,
+                    // and we stop retrying it on every notification.
+                    if (str_contains($e->getMessage(), 'invalid_grant')) {
+                        // Same raw update the manual Disconnect uses (the 'encrypted' cast does not
+                        // reliably write NULL), so the dead tokens are wiped as well.
+                        DB::connection($connection)->table('oauth_tokens')->where('id', $token->id)->update([
+                            'access_token' => null,
+                            'refresh_token' => null,
+                            'scope' => null,
+                            'disconnected_at' => now(),
+                        ]);
+                        Log::info('Gmail connection marked disconnected (token revoked/expired)', [
+                            'email' => $emailAddress,
+                            'token_id' => $token->id,
+                        ]);
+                    }
                 }
-                break;
             }
         }
 

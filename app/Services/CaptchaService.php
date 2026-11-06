@@ -7,44 +7,50 @@ use Illuminate\Support\Facades\Log;
 
 class CaptchaService
 {
+    private const VERIFY_URL = 'https://challenges.cloudflare.com/turnstile/v0/siteverify';
+
     /**
-     * PRD Section 14 requires CAPTCHA on Signup and Login. Provider
-     * confirmed as Google reCAPTCHA v2 ("I'm not a robot" checkbox).
-     * Verifies the token the frontend widget produces against Google's
-     * siteverify endpoint.
+     * PRD Section 14 requires CAPTCHA on Signup and Login. Provider: Cloudflare Turnstile
+     * (replaces Google reCAPTCHA). Verifies the token the frontend widget produces
+     * against Cloudflare's siteverify endpoint. The request field is still called
+     * `captcha_token`, so controllers and requests are unchanged.
      */
-    public function verify(string $token): bool
+    public function verify(?string $token): bool
     {
         if (blank($token)) {
             return false;
         }
 
-        $secret = config('services.recaptcha.secret');
+        $secret = config('services.turnstile.secret');
 
-        // If no secret is configured yet (e.g. still setting up keys),
-        // fail closed in production but allow local dev to proceed —
-        // remove this escape hatch once real keys are in .env everywhere.
+        // If no secret is configured yet, fail closed everywhere except local dev.
         if (blank($secret)) {
-            Log::warning('RECAPTCHA_SECRET_KEY not configured — CAPTCHA check skipped.');
+            Log::warning('TURNSTILE_SECRET_KEY not configured — CAPTCHA check skipped.');
             return app()->environment('local');
         }
 
-        $response = Http::asForm()->post('https://www.google.com/recaptcha/api/siteverify', [
-            'secret' => $secret,
-            'response' => $token,
-        ]);
+        try {
+            $response = Http::asForm()->timeout(10)->post(self::VERIFY_URL, array_filter([
+                'secret' => $secret,
+                'response' => $token,
+                'remoteip' => request()?->ip(),
+            ]));
+        } catch (\Throwable $e) {
+            Log::error('Turnstile verification request failed', ['error' => $e->getMessage()]);
+            return false;
+        }
 
         if (!$response->successful()) {
-            Log::error('reCAPTCHA verification request failed', ['status' => $response->status()]);
+            Log::error('Turnstile verification request failed', ['status' => $response->status()]);
             return false;
         }
 
         $result = $response->json();
 
         if (!($result['success'] ?? false)) {
-            Log::info('reCAPTCHA verification failed', ['errors' => $result['error-codes'] ?? []]);
+            Log::info('Turnstile verification failed', ['errors' => $result['error-codes'] ?? []]);
         }
 
-        return $result['success'] ?? false;
+        return (bool) ($result['success'] ?? false);
     }
 }

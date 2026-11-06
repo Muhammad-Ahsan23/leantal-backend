@@ -191,6 +191,10 @@ class CandidateController extends Controller
             return response()->json(['message' => 'You do not have permission to view this candidate.'], 403);
         }
 
+        // The internal rejection reason is hidden on the Application model so it can never reach a candidate-facing
+        // response (PRD Sec 29/38). This is the logged-in staff profile, so it is shown here - and only here.
+        $candidate->applications->each(fn ($application) => $application->makeVisible('rejection_reason_internal'));
+
         return response()->json(['candidate' => $candidate]);
     }
 

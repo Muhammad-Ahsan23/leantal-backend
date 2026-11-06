@@ -72,10 +72,11 @@ return [
         'pubsub_topic' => env('GOOGLE_PUBSUB_TOPIC'),
         'pubsub_webhook_secret' => env('GOOGLE_PUBSUB_WEBHOOK_SECRET'),
     ],
-    // Google reCAPTCHA v2 secret (CaptchaService). Must belong to the SAME key pair as the site key in the frontend
-    // (components/common/Recaptcha.jsx), and that key must allow the frontend's domain in the reCAPTCHA admin console.
-    'recaptcha' => [
-        'secret' => env('RECAPTCHA_SECRET_KEY'),
+    // Cloudflare Turnstile secret (CaptchaService). Must belong to the SAME widget as the site key in the frontend
+    // (VITE_TURNSTILE_SITE_KEY), and that widget must list the frontend's domain under Hostnames in the Cloudflare dashboard.
+    // For local development Cloudflare's always-pass dummy secret is 1x0000000000000000000000000000000AA.
+    'turnstile' => [
+        'secret' => env('TURNSTILE_SECRET_KEY'),
     ],
 
     // Zoom (User-managed OAuth app from marketplace.zoom.us): every interviewer connects their OWN Zoom account;

@@ -6,6 +6,7 @@ use App\Http\Controllers\Controller;
 use App\Http\Requests\Departments\CreateDepartmentRequest;
 use App\Http\Requests\Departments\UpdateDepartmentRequest;
 use App\Models\Department;
+use App\Support\TextFormat;
 use Illuminate\Http\Request;
 
 class DepartmentController extends Controller
@@ -37,13 +38,14 @@ class DepartmentController extends Controller
             return response()->json(['message' => 'Only the Owner can manage departments.'], 403);
         }
 
-        $exists = Department::on($connection)->where('company_id', $user->company_id)->where('name', $request->validated()['name'])->exists();
-        if ($exists) {
+        // Names are saved in Title Case, so "developer" and "Developer" are the same department.
+        $name = TextFormat::title($request->validated()['name']);
+        if ($this->nameTaken($connection, $user->company_id, $name)) {
             return response()->json(['message' => 'A department with this name already exists.'], 422);
         }
 
         $department = Department::on($connection)->create([
-            ...$request->validated(),
+            'name' => $name,
             'company_id' => $user->company_id,
         ]);
 
@@ -64,9 +66,24 @@ class DepartmentController extends Controller
             return response()->json(['message' => 'Department not found.'], 404);
         }
 
-        $department->update($request->validated());
+        $name = TextFormat::title($request->validated()['name']);
+        if ($this->nameTaken($connection, $user->company_id, $name, $department->id)) {
+            return response()->json(['message' => 'A department with this name already exists.'], 422);
+        }
+
+        $department->update(['name' => $name]);
 
         return response()->json(['department' => $department->fresh()]);
+    }
+
+    /** Case-insensitive duplicate check within one company (optionally ignoring the row being renamed). */
+    private function nameTaken(string $connection, string $companyId, string $name, ?string $exceptId = null): bool
+    {
+        return Department::on($connection)
+            ->where('company_id', $companyId)
+            ->whereRaw('lower(name) = ?', [mb_strtolower($name)])
+            ->when($exceptId, fn ($q) => $q->where('id', '!=', $exceptId))
+            ->exists();
     }
 
     public function destroy(Request $request, string $id)
