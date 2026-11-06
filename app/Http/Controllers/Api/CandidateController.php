@@ -4,6 +4,7 @@ namespace App\Http\Controllers\Api;
 
 use App\Http\Controllers\Controller;
 use App\Http\Requests\Candidates\AssignCandidateRequest;
+use App\Http\Requests\Candidates\BulkCandidateRequest;
 use App\Http\Requests\Candidates\CreateCandidateRequest;
 use App\Http\Requests\Candidates\UpdateCandidateRequest;
 use App\Http\Requests\Candidates\ReplaceResumeRequest;
@@ -391,6 +392,59 @@ class CandidateController extends Controller
         $candidate = $this->candidates->assign($candidate, $targetUserId, $user, $connection);
 
         return response()->json(['candidate' => $candidate]);
+    }
+
+    /**
+     * PRD 25 - bulk actions: archive / restore / assign / delete up to 100 candidates in ONE request.
+     * Every candidate goes through the SAME policy check and service method as the single-candidate endpoint, so
+     * roles behave exactly as before (Recruiters cannot archive/delete/assign; Owner/HM can). One that is not allowed
+     * or not found is reported back and does not stop the rest.
+     */
+    public function bulk(BulkCandidateRequest $request)
+    {
+        $user = $request->user();
+        $connection = $user->getConnectionName();
+        $data = $request->validated();
+        $action = $data['action'];
+        $ability = ['archive' => 'archive', 'restore' => 'archive', 'assign' => 'assign', 'delete' => 'delete'][$action];
+        $verb = ['archive' => 'archive', 'restore' => 'restore', 'assign' => 'reassign', 'delete' => 'delete'][$action];
+
+        if ($action === 'assign') {
+            $target = User::on($connection)->where('company_id', $user->company_id)->find($data['assigned_user_id']);
+            if (!$target) {
+                return response()->json(['message' => 'That user was not found in your company.'], 422);
+            }
+        }
+
+        $found = Candidate::on($connection)->whereIn('id', $data['ids'])->get()->keyBy('id');
+        $succeeded = 0;
+        $failed = [];
+
+        foreach ($data['ids'] as $id) {
+            $candidate = $found->get($id);
+            if (!$candidate) {
+                $failed[] = ['id' => $id, 'name' => null, 'message' => 'Candidate not found.'];
+                continue;
+            }
+            if (!$user->can($ability, $candidate)) {
+                $failed[] = ['id' => $id, 'name' => $candidate->name, 'message' => "You do not have permission to {$verb} this candidate."];
+                continue;
+            }
+            try {
+                match ($action) {
+                    'archive' => $this->candidates->archive($candidate, $user, $connection),
+                    'restore' => $this->candidates->restore($candidate, $user, $connection),
+                    'assign' => $this->candidates->assign($candidate, $data['assigned_user_id'], $user, $connection),
+                    'delete' => $this->candidates->softDelete($candidate, $user, $connection),
+                };
+                $succeeded++;
+            } catch (\Throwable $e) {
+                report($e);
+                $failed[] = ['id' => $id, 'name' => $candidate->name, 'message' => "Could not {$verb} this candidate."];
+            }
+        }
+
+        return response()->json(['succeeded' => $succeeded, 'failed' => $failed]);
     }
 
     /**

@@ -148,6 +148,7 @@ Route::middleware('auth:sanctum')->group(function () {
     Route::get('/candidates', [CandidateController::class, 'index']);
     Route::post('/candidates', [CandidateController::class, 'store']);
     Route::get('/candidates/export', [CandidateExportController::class, 'export']);
+    Route::post('/candidates/bulk', [CandidateController::class, 'bulk']);
     Route::post('/candidates/import/headers', [CandidateImportController::class, 'headers']);
     Route::post('/candidates/import/preview', [CandidateImportController::class, 'preview']);
     Route::post('/candidates/import/confirm', [CandidateImportController::class, 'confirm']);

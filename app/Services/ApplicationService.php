@@ -58,9 +58,8 @@ class ApplicationService
         } elseif ($newStage->name === 'Rejected') {
             $updates['status'] = 'rejected';
             $updates['rejected_at'] = now();
-            if ($rejectionReason) {
-                $updates['rejection_reason_internal'] = $rejectionReason;
-            }
+            // The reason belongs to THIS rejection: a new rejection without one clears an older reason.
+            $updates['rejection_reason_internal'] = $rejectionReason ?: null;
         } else {
             // Moving into (or back into) a non-terminal stage — e.g.
             // correcting an accidental Reject. hired_at/rejected_at are
