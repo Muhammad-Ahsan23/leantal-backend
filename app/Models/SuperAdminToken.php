@@ -15,5 +15,5 @@ class SuperAdminToken extends Model
 
     protected $fillable = ['super_admin_id', 'token_hash', 'expires_at', 'step_up_until'];
 
-    protected $casts = ['expires_at' => 'datetime', 'step_up_until' => 'datetime'];
+    protected $casts = ['expires_at' => 'datetime', 'step_up_until' => 'datetime', 'created_at' => 'datetime'];
 }

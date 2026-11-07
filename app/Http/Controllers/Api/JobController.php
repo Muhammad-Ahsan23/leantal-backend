@@ -206,6 +206,38 @@ class JobController extends Controller
         return response()->json(['job' => $job]);
     }
 
+    /**
+     * Delete a job. ?delete_candidates=1 also deletes the candidates who applied ONLY to this job; without it the
+     * candidates stay and show as "Not Applied". See JobService::deleteJob(). Owner / Hiring Manager only.
+     */
+    public function destroy(Request $request, string $id)
+    {
+        $user = $request->user();
+        $connection = $user->getConnectionName();
+        $job = Job::on($connection)->find($id);
+
+        if (!$job) {
+            return response()->json(['message' => 'Job not found.'], 404);
+        }
+
+        if (!$user->can('delete', $job)) {
+            return response()->json(['message' => 'You do not have permission to delete this job.'], 403);
+        }
+
+        $deleteCandidates = $request->boolean('delete_candidates');
+        $title = $job->title;
+        $result = $this->jobs->deleteJob($job, $deleteCandidates, $user, $connection);
+
+        ActivityLogger::log($connection, $user->company_id, $user->id, 'job.deleted', 'job', $job->id, [
+            'job_title' => $title,
+            'deleted_candidates' => $result['deleted_candidates'],
+            'kept_candidates' => $result['kept_candidates'],
+            'with_candidates' => $deleteCandidates,
+        ]);
+
+        return response()->json(['message' => 'Job deleted.'] + $result);
+    }
+
     public function assign(AssignJobRequest $request, string $id)
     {
         $user = $request->user();

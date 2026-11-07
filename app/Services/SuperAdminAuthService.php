@@ -4,6 +4,7 @@ namespace App\Services;
 
 use App\Models\SuperAdmin;
 use App\Models\SuperAdminToken;
+use Illuminate\Support\Carbon;
 use Illuminate\Support\Facades\Hash;
 use Illuminate\Support\Str;
 
@@ -22,7 +23,12 @@ use Illuminate\Support\Str;
  */
 class SuperAdminAuthService
 {
+    // Idle timeout: a session ends after this many minutes WITHOUT any request. Every request pushes it forward again.
     protected const TOKEN_LIFETIME_MINUTES = 30;
+    // Absolute cap: however active the admin is, a session never lives longer than this from the moment of login.
+    protected const SESSION_MAX_MINUTES = 480;
+    // The expiry is written back at most this often, so a page firing 10 requests at once does 1 write, not 10.
+    protected const SLIDE_THROTTLE_SECONDS = 60;
     // How long an authenticator code keeps sensitive actions unlocked (see EnsureRecentMfa).
     protected const STEP_UP_MINUTES = 5;
 
@@ -159,7 +165,55 @@ class SuperAdminAuthService
             return null;
         }
 
+        // Sliding session: an active admin is not logged out mid-work, an idle one still is.
+        $newExpiry = self::slidingExpiry(
+            $tokenRecord->created_at?->getTimestamp(),
+            $tokenRecord->expires_at->getTimestamp(),
+            now()->getTimestamp()
+        );
+
+        if ($newExpiry === false) {
+            $tokenRecord->delete(); // past the absolute cap: the session is over, whatever the idle timer says
+            return null;
+        }
+
+        if ($newExpiry !== null) {
+            // Only ever moves the expiry forward (a parallel request cannot shorten it).
+            $until = Carbon::createFromTimestamp($newExpiry);
+            SuperAdminToken::whereKey($tokenRecord->getKey())
+                ->where('expires_at', '<', $until)
+                ->update(['expires_at' => $until]);
+        }
+
         return $admin->setRelation('currentToken', $tokenRecord);
+    }
+
+    /**
+     * The sliding-session rule, as plain timestamps (so it can be tested without a database).
+     *
+     * @return int|false|null  a new expiry timestamp to store, null = leave it as it is, false = past the absolute cap
+     */
+    public static function slidingExpiry(?int $createdAt, int $currentExpiry, int $now): int|false|null
+    {
+        // Rows without a created_at (should not exist) simply keep the old fixed behaviour.
+        if ($createdAt === null) {
+            return null;
+        }
+
+        $hardLimit = $createdAt + self::SESSION_MAX_MINUTES * 60;
+
+        if ($now >= $hardLimit) {
+            return false;
+        }
+
+        $target = min($now + self::TOKEN_LIFETIME_MINUTES * 60, $hardLimit);
+
+        // Not worth a database write for a few seconds of difference.
+        if ($target - $currentExpiry < self::SLIDE_THROTTLE_SECONDS) {
+            return null;
+        }
+
+        return $target;
     }
 
     /**

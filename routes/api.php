@@ -107,6 +107,7 @@ Route::get('/public/careers/{companySlug}/feed.xml', [PublicJobFeedController::c
 Route::get('/public/careers/{companySlug}/sitemap.xml', [PublicJobFeedController::class, 'companySitemap']);
 Route::get('/public/careers/{companySlug}', [PublicCareersController::class, 'index']);
 Route::get('/public/careers/{companySlug}/jobs/{jobId}', [PublicCareersController::class, 'showJob']);
+Route::post('/public/careers/{companySlug}/jobs/{jobId}/apply/send-code', [PublicCareersController::class, 'sendCode']);
 Route::post('/public/careers/{companySlug}/jobs/{jobId}/apply', [PublicCareersController::class, 'apply']);
 
 // Protected routes — require a valid Sanctum bearer token
@@ -130,6 +131,7 @@ Route::middleware('auth:sanctum')->group(function () {
     Route::get('/jobs/{id}', [JobController::class, 'show']);
     Route::patch('/jobs/{id}', [JobController::class, 'update']);
     Route::patch('/jobs/{id}/status', [JobController::class, 'updateStatus']);
+    Route::delete('/jobs/{id}', [JobController::class, 'destroy']);
     Route::post('/jobs/{id}/assign', [JobController::class, 'assign']);
     Route::get('/jobs/{id}/share-links', [JobController::class, 'shareLinks']);
 

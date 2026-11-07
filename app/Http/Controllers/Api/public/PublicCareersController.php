@@ -7,11 +7,14 @@ use App\Http\Controllers\Controller;
 use App\Http\Requests\Public\SubmitApplicationRequest;
 use App\Models\ApplicationQuestion;
 use App\Models\Job;
+use App\Services\ApplyOtpService;
+use App\Services\CaptchaService;
 use App\Services\PublicApplicationService;
 use App\Services\RegionResolver;
 use App\Services\RegionRoutingRepository;
 use Illuminate\Http\Request;
 use Illuminate\Support\Facades\DB;
+use Illuminate\Support\Facades\Mail;
 use Illuminate\Support\Facades\RateLimiter;
 
 class PublicCareersController extends Controller
@@ -27,6 +30,8 @@ class PublicCareersController extends Controller
         protected RegionRoutingRepository $routing,
         protected PublicApplicationService $applications,
         protected \App\Services\JobStructuredDataService $structuredData,
+        protected CaptchaService $captcha,
+        protected ApplyOtpService $applyOtp,
     ) {}
 
     public function index(Request $request, string $companySlug)
@@ -144,6 +149,53 @@ class PublicCareersController extends Controller
     }
 
     /**
+     * Step 1 of applying: CAPTCHA + email -> emails a 6-digit code to the candidate.
+     * At most 3 codes per email per job every 10 minutes (the same email can still apply to other jobs).
+     */
+    public function sendCode(Request $request, string $companySlug, string $jobId)
+    {
+        $data = $request->validate([
+            'email' => ['required', 'email:rfc', 'max:255'],
+            'captcha_token' => ['required', 'string'],
+        ]);
+
+        $company = $this->resolveCompany($companySlug);
+        if (!$company) {
+            return response()->json(['message' => 'Careers page not found.'], 404);
+        }
+
+        $connection = RegionResolver::connectionFor($company['region']);
+
+        if (DB::connection($connection)->table('companies')->where('id', $company['company_id'])->value('suspended_at')) {
+            return response()->json(['message' => 'This job is no longer accepting applications.'], 404);
+        }
+
+        $job = Job::on($connection)->where('company_id', $company['company_id'])->where('status', 'published')->find($jobId, ['id', 'title']);
+        if (!$job) {
+            return response()->json(['message' => 'This job is no longer accepting applications.'], 404);
+        }
+
+        if (!$this->captcha->verify($data['captcha_token'])) {
+            return response()->json(['message' => 'CAPTCHA verification failed. Please try again.'], 422);
+        }
+
+        $email = strtolower(trim($data['email']));
+        $sendKey = 'apply-otp-send:'.sha1($email.'|'.$jobId);
+        if (RateLimiter::tooManyAttempts($sendKey, 3)) {
+            return response()->json(['message' => 'Too many codes requested. Please try again in a few minutes.'], 429);
+        }
+        RateLimiter::hit($sendKey, ApplyOtpService::EXPIRY_MINUTES * 60);
+
+        $code = $this->applyOtp->issue($email, $jobId);
+        $minutes = ApplyOtpService::EXPIRY_MINUTES;
+        Mail::raw("Your LeanTal verification code is: {$code}\n\nUse it to confirm your application for {$job->title}. This code expires in {$minutes} minutes.\n\nIf you did not apply for this job, you can ignore this email.", function ($message) use ($email) {
+            $message->to($email)->subject('Your LeanTal verification code');
+        });
+
+        return response()->json(['message' => 'We emailed you a 6-digit code.', 'expires_in_minutes' => $minutes]);
+    }
+
+    /**
      * PRD Section 93 (application flow) + Section 29 (knockout stays
      * silent) + Section 119 (suspended companies — "halts... job
      * application intake"). Rate-limited per email+job to blunt trivial
@@ -193,6 +245,18 @@ class PublicCareersController extends Controller
         $answerErrors = array_merge($profileErrors, $answerErrors);
         if (!empty($answerErrors)) {
             return response()->json(['message' => 'Some required questions were not answered.', 'errors' => $answerErrors], 422);
+        }
+
+        // The emailed code is checked last, so a form mistake above never uses up one of the 3 guesses.
+        $otpResult = $this->applyOtp->verify($email, $jobId, (string) $request->input('otp', ''));
+        if ($otpResult !== 'ok') {
+            $message = match ($otpResult) {
+                'wrong' => 'That code is not correct. Please check it and try again.',
+                'locked' => 'Too many incorrect codes. Please request a new code.',
+                default => 'Your code has expired or was not requested. Please request a new code.',
+            };
+
+            return response()->json(['message' => $message, 'otp_error' => $otpResult], 422);
         }
 
         try {

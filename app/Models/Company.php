@@ -5,6 +5,7 @@ namespace App\Models;
 use Illuminate\Database\Eloquent\Concerns\HasUuids;
 use Illuminate\Database\Eloquent\Factories\HasFactory;
 use Illuminate\Database\Eloquent\Model;
+use Illuminate\Support\Facades\Log;
 
 class Company extends Model
 {
@@ -55,6 +56,38 @@ class Company extends Model
         'data_retention_choice',
         'suspended_reason',
     ];
+
+    /**
+     * A Super Admin seat/job override is a deal made for ONE plan. When the plan changes (Creem webhook, checkout,
+     * manual change), the override is dropped, so a customer who upgrades never keeps a limit below what they now pay
+     * for. Done here, in the model, so every place that changes the plan follows the same rule. A save that sets the
+     * override itself keeps what it sets.
+     */
+    protected static function booted(): void
+    {
+        static::saving(function (Company $company) {
+            if (!$company->exists || !$company->isDirty('plan')) {
+                return;
+            }
+
+            $dropped = [];
+            foreach (['seat_limit_override', 'job_limit_override'] as $column) {
+                if ($company->$column !== null && !$company->isDirty($column)) {
+                    $dropped[$column] = $company->$column;
+                    $company->$column = null;
+                }
+            }
+
+            if ($dropped) {
+                Log::info('Company limit overrides reset because the plan changed', [
+                    'company_id' => $company->id,
+                    'from_plan' => $company->getOriginal('plan'),
+                    'to_plan' => $company->plan,
+                    'dropped' => $dropped,
+                ]);
+            }
+        });
+    }
 
     public function users()
     {

@@ -5,8 +5,10 @@ namespace App\Services;
 use App\Models\Application;
 use App\Models\Candidate;
 use App\Models\Company;
+use App\Models\Interview;
 use App\Models\Job;
 use App\Models\PipelineStage;
+use App\Models\Task;
 use App\Models\User;
 use App\Support\CacheVersion;
 use App\Services\NotificationService;
@@ -193,6 +195,47 @@ class JobService
         }
 
         return $job->fresh();
+    }
+
+    /**
+     * Delete a job PERMANENTLY (the job row is removed, not hidden). What happens around it:
+     *  - the job's pipeline stages, application questions and applications (with their answers) are removed with it;
+     *  - the job's interviews are removed too (an interview cannot exist without its job);
+     *  - tasks that pointed at the job are kept and simply lose the link;
+     *  - the people who applied: a candidate with no other job shows as "Not Applied". $deleteCandidates = true also
+     *    deletes those candidates (with the usual candidate delete) - but ONLY the ones who applied to no other job;
+     *    anyone who is also in another job is kept, because deleting them would pull them out of that job.
+     * Everything runs in one transaction, so it is all-or-nothing.
+     *
+     * @return array{deleted_candidates:int, kept_candidates:int}  kept = applied elsewhere too, not deleted
+     */
+    public function deleteJob(Job $job, bool $deleteCandidates, User $actor, string $connection): array
+    {
+        $result = ['deleted_candidates' => 0, 'kept_candidates' => 0];
+
+        DB::connection($connection)->transaction(function () use ($job, $deleteCandidates, $actor, $connection, &$result) {
+            $candidateIds = Application::on($connection)->where('job_id', $job->id)->pluck('candidate_id')->unique()->values();
+
+            Interview::on($connection)->where('job_id', $job->id)->delete();
+            Task::on($connection)->where('job_id', $job->id)->update(['job_id' => null]);
+            Application::on($connection)->where('job_id', $job->id)->delete(); // answers go with them (cascade)
+
+            if ($deleteCandidates && $candidateIds->isNotEmpty()) {
+                $stillApplied = Application::on($connection)->whereIn('candidate_id', $candidateIds)->pluck('candidate_id')->unique();
+                $toDelete = Candidate::on($connection)->whereIn('id', $candidateIds->diff($stillApplied)->values())->get();
+                foreach ($toDelete as $candidate) {
+                    app(CandidateService::class)->softDelete($candidate, $actor, $connection);
+                }
+                $result['deleted_candidates'] = $toDelete->count();
+                $result['kept_candidates'] = $candidateIds->count() - $toDelete->count();
+            }
+
+            $job->delete(); // stages + questions cascade
+        });
+
+        $this->forgetJobsCache($job->company_id);
+
+        return $result;
     }
 
     protected function assertJobLimitNotReached(Company $company, string $connection, ?string $excludeJobId = null): void

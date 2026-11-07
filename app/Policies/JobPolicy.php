@@ -13,6 +13,7 @@ use App\Support\Roles;
  * There is no "delete job" in the PRD — jobs only move through
  * Draft/Published/Paused/Closed/Archived via status updates (Section 21-27),
  * so status changes are covered by update(), not a separate ability.
+ * Client request (later): Owner / Hiring Manager can also DELETE a job (see delete()).
  */
 class JobPolicy
 {
@@ -48,5 +49,10 @@ class JobPolicy
     public function assign(User $user, Job $job): bool
     {
         return $this->update($user, $job); // same rule — Owner/HM only
+    }
+
+    public function delete(User $user, Job $job): bool
+    {
+        return $this->update($user, $job); // Owner / Hiring Manager only
     }
 }

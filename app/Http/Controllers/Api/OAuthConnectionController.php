@@ -38,7 +38,16 @@ class OAuthConnectionController extends Controller
         $tokens = OAuthToken::on($connection)
             ->where('user_id', $user->id)
             ->whereNull('disconnected_at')
-            ->get(['provider', 'connected_at', 'expires_at']);
+            ->get(['provider', 'connected_at', 'expires_at', 'refresh_token'])
+            // The access token lasts ~1h and is refreshed silently, so "expires_at" alone
+            // does not mean the connection is dead. Only expose whether a refresh token
+            // exists (never the token itself) so the UI can tell the two apart.
+            ->map(fn ($t) => [
+                'provider' => $t->provider,
+                'connected_at' => $t->connected_at,
+                'expires_at' => $t->expires_at,
+                'has_refresh_token' => !empty($t->refresh_token),
+            ]);
 
         return response()->json(['connections' => $tokens]);
     }
