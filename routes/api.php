@@ -178,7 +178,7 @@ Route::middleware('auth:sanctum')->group(function () {
     Route::patch('/tasks/{id}', [TaskController::class, 'update']);
     Route::patch('/tasks/{id}/status', [TaskController::class, 'updateStatus']);
     Route::delete('/tasks/{id}', [TaskController::class, 'destroy']);
-    Route::post('/tasks/{id}/attachments', [TaskAttachmentController::class, 'store']);
+    // Adding files to a task was removed on purpose (no upload route). Files attached earlier can still be downloaded or removed.
     Route::get('/tasks/{id}/attachments/{attachmentId}/url', [TaskAttachmentController::class, 'url']);
     Route::delete('/tasks/{id}/attachments/{attachmentId}', [TaskAttachmentController::class, 'destroy']);
 

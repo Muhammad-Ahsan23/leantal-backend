@@ -24,7 +24,7 @@ class CompanyController extends Controller
         $connection = $user->getConnectionName();
         $company = Company::on($connection)->find($user->company_id);
 
-        $payload = $company ? $company->toArray() : null;
+        $payload = $company ? $this->payload($company) : null;
         if ($payload && $company->past_due_since) {
             // When the failed-payment grace period ends (the banner shows this date).
             $payload['past_due_grace_ends_at'] = $company->past_due_since
@@ -62,7 +62,19 @@ class CompanyController extends Controller
 
         $company->update($data);
 
-        return response()->json(['company' => $company->fresh()]);
+        return response()->json(['company' => $this->payload($company->fresh())]);
+    }
+
+    /**
+     * The company as the app needs it: the record plus the limits that really apply today. seat_limit / job_limit
+     * already include any Super Admin override (null = unlimited), so the frontend never has to know the plan table.
+     */
+    protected function payload(Company $company): array
+    {
+        return $company->toArray() + [
+            'seat_limit' => $company->seatLimit(),
+            'job_limit' => $company->jobLimit(),
+        ];
     }
 
     /**

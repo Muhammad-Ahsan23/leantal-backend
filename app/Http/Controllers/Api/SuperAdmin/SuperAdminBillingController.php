@@ -95,6 +95,13 @@ class SuperAdminBillingController extends Controller
         if ($data['plan'] !== 'free' && in_array($company->subscription_status, ['trialing', 'read_only'], true)) {
             $update['subscription_status'] = 'active';
         }
+        // A plan change drops any seat/job override (Company::booted); the audit entry records what was dropped.
+        foreach (['seat_limit_override', 'job_limit_override'] as $column) {
+            if ($company->$column !== null) {
+                $before[$column] = $company->$column;
+                $update[$column] = null;
+            }
+        }
         $company->update($update);
 
         $this->audit->log($request->attributes->get('super_admin'), 'company_plan_changed', $request->ip(), 'company', $companyId, [

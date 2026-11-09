@@ -116,6 +116,9 @@ class BillingController extends Controller
         // write if something below throws.
         $simulated = $company->replicate();
         $simulated->plan = $newPlan;
+        // A plan change drops the seat/job overrides (Company::booted), so the check must judge the plan's own limits.
+        $simulated->seat_limit_override = null;
+        $simulated->job_limit_override = null;
 
         $newSeatLimit = $simulated->seatLimit();
         if ($newSeatLimit !== null) {
