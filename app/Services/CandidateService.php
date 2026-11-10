@@ -9,6 +9,7 @@ use App\Models\Note;
 use App\Models\PipelineStage;
 use App\Models\User;
 use App\Support\CacheVersion;
+use Illuminate\Database\UniqueConstraintViolationException;
 use Illuminate\Http\UploadedFile;
 use Illuminate\Support\Facades\DB;
 use Illuminate\Support\Str;
@@ -97,9 +98,12 @@ class CandidateService
     {
         $normalizedEmail = strtolower(trim($data['email']));
         $isNewCandidate = false;
+        $reapplied = false;
         $resumeMeta = $this->resumeStorage->store($resume, RegionResolver::regionForConnection($connection));
 
-        $result = DB::connection($connection)->transaction(function () use ($data, $job, $actor, $connection, $normalizedEmail, &$isNewCandidate, $resumeMeta) {
+        $work = function () use ($data, $job, $actor, $connection, $normalizedEmail, &$isNewCandidate, &$reapplied, $resumeMeta) {
+            $isNewCandidate = false; // (reset: this body can run a second time, see below)
+            $reapplied = false;
             $candidate = Candidate::on($connection)
                 ->where('company_id', $job->company_id)
                 ->where('normalized_email', $normalizedEmail)
@@ -131,49 +135,67 @@ class CandidateService
                 $candidate->update($resumeMeta);
             }
 
-            $existingActiveApplication = Application::on($connection)
-                ->where('candidate_id', $candidate->id)
-                ->where('job_id', $job->id)
-                ->where('status', 'active')
-                ->exists();
-
-            if ($existingActiveApplication) {
-                throw new \RuntimeException('This candidate already has an active application for this job.');
-            }
-
             $appliedStage = PipelineStage::on($connection)
                 ->where('job_id', $job->id)
                 ->where('name', 'Applied')
                 ->first();
 
-            $application = Application::on($connection)->create([
-                'company_id' => $job->company_id,
-                'candidate_id' => $candidate->id,
-                'job_id' => $job->id,
-                'stage_id' => $appliedStage?->id,
-                'status' => 'active',
-                'applied_at' => now(),
-                'lock_version' => 1, // matches schema default (Section 98)
-            ]);
-
-            // Added from a pipeline column's "+": put the application in THAT stage. Done with the same
-            // moveStage() a drag-and-drop uses, so Hired / Rejected set the status and dates correctly and
-            // the move is logged. Any failure rolls back the whole add (no half-added candidate).
+            // Added from a pipeline column's "+": that column is where the card goes (Applied otherwise).
             $targetStageId = $data['stage_id'] ?? null;
-            if ($targetStageId && $targetStageId !== $appliedStage?->id) {
-                $application = app(ApplicationService::class)->moveStage(
-                    $application, $targetStageId, (int) $application->lock_version, null, $actor->id, $connection
-                );
+            $applications = app(ApplicationService::class);
+
+            $existing = $applications->findForReapply($candidate->id, $job->id, $connection);
+
+            if ($existing && $existing->status === 'active') {
+                throw new \RuntimeException('This candidate already has an active application for this job.');
+            }
+
+            if ($existing) {
+                // Hired / Rejected before and now added again: the SAME application comes back (one person, one card
+                // per job) - no second card. Its history stays in the activity log.
+                $reapplied = true;
+                $startStageId = $targetStageId ?: $appliedStage?->id;
+                if (!$startStageId) {
+                    throw new \RuntimeException('This job has no Applied stage.');
+                }
+                $application = $applications->reopen($existing, $startStageId, $connection);
+            } else {
+                $application = Application::on($connection)->create([
+                    'company_id' => $job->company_id,
+                    'candidate_id' => $candidate->id,
+                    'job_id' => $job->id,
+                    'stage_id' => $appliedStage?->id,
+                    'status' => 'active',
+                    'applied_at' => now(),
+                    'lock_version' => 1, // matches schema default (Section 98)
+                ]);
+
+                // Same moveStage() a drag-and-drop uses, so Hired / Rejected set the status and dates correctly and
+                // the move is logged. Any failure rolls back the whole add (no half-added candidate).
+                if ($targetStageId && $targetStageId !== $appliedStage?->id) {
+                    $application = $applications->moveStage(
+                        $application, $targetStageId, (int) $application->lock_version, null, $actor->id, $connection
+                    );
+                }
             }
 
             $this->logActivity($connection, $job->company_id, $actor->id, 'candidate.added_to_job', 'application', $application->id, [
                 'candidate_name' => $candidate->name,
                 'job_title' => $job->title,
                 'new_candidate' => $isNewCandidate,
+                'reapplied' => $reapplied,
             ]);
 
             return [$candidate, $application];
-        });
+        };
+
+        try {
+            $result = DB::connection($connection)->transaction($work);
+        } catch (UniqueConstraintViolationException $e) {
+            // Two requests added the same person at the same moment and the database's unique index let only one
+            // win. The losing transaction is rolled back; run it once more, it now finds the winner's candidate.
+            $result = DB::connection($connection)->transaction($work);
+        }
 
         $this->forgetCandidatesCache($job->company_id);
 

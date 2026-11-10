@@ -171,6 +171,7 @@ Route::middleware('auth:sanctum')->group(function () {
     Route::get('/applications/{id}/answers', [ApplicationController::class, 'answers']);
     Route::get('/applications/{id}/answers/{answerId}/file-url', [ApplicationController::class, 'answerFileUrl']);
     Route::patch('/applications/{id}/stage', [ApplicationController::class, 'moveStage']);
+    Route::post('/applications/bulk-stage', [ApplicationController::class, 'bulkMoveStage']);
 
     Route::get('/tasks', [TaskController::class, 'index']);
     Route::post('/tasks', [TaskController::class, 'store']);

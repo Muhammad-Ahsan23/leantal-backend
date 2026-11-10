@@ -9,6 +9,7 @@ use App\Models\ApplicationQuestion;
 use App\Models\Candidate;
 use App\Models\Job;
 use App\Models\PipelineStage;
+use Illuminate\Database\UniqueConstraintViolationException;
 use Illuminate\Http\UploadedFile;
 use Illuminate\Support\Facades\DB;
 use Illuminate\Support\Facades\Storage;
@@ -260,8 +261,21 @@ class PublicApplicationService
         $resumeMeta = $this->resumeStorage->store($resume, $region);
         $storedFiles = $this->storeAnswerFiles($job, $answerFiles, $connection, $region);
 
+        $replacedFiles = []; // files of an earlier attempt that this new one replaces (deleted only once it is saved)
+
         try {
-            return $this->createApplication($job, $data, $connection, $normalizedEmail, $resumeMeta, $storedFiles);
+            try {
+                $result = $this->createApplication($job, $data, $connection, $normalizedEmail, $resumeMeta, $storedFiles, $replacedFiles);
+            } catch (UniqueConstraintViolationException $e) {
+                // Same person submitted twice at the same moment and the unique index let one through: run it once
+                // more, it now finds the other one's candidate / active application and answers accordingly.
+                $replacedFiles = [];
+                $result = $this->createApplication($job, $data, $connection, $normalizedEmail, $resumeMeta, $storedFiles, $replacedFiles);
+            }
+
+            $this->deleteStoredFiles($replacedFiles);
+
+            return $result;
         } catch (\Throwable $e) {
             // The application was not created (e.g. a duplicate) — don't leave its files orphaned in storage.
             $this->deleteStoredFiles($storedFiles);
@@ -269,9 +283,9 @@ class PublicApplicationService
         }
     }
 
-    protected function createApplication(Job $job, array $data, string $connection, string $normalizedEmail, ?array $resumeMeta, array $storedFiles): array
+    protected function createApplication(Job $job, array $data, string $connection, string $normalizedEmail, ?array $resumeMeta, array $storedFiles, array &$replacedFiles): array
     {
-        return DB::connection($connection)->transaction(function () use ($job, $data, $connection, $normalizedEmail, $resumeMeta, $storedFiles) {
+        return DB::connection($connection)->transaction(function () use ($job, $data, $connection, $normalizedEmail, $resumeMeta, $storedFiles, &$replacedFiles) {
             $candidate = Candidate::on($connection)
                 ->where('company_id', $job->company_id)
                 ->where('normalized_email', $normalizedEmail)
@@ -298,13 +312,10 @@ class PublicApplicationService
                 $candidate->update($resumeMeta);
             }
 
-            $alreadyApplied = Application::on($connection)
-                ->where('candidate_id', $candidate->id)
-                ->where('job_id', $job->id)
-                ->where('status', 'active')
-                ->exists();
+            $applications = app(ApplicationService::class);
+            $existing = $applications->findForReapply($candidate->id, $job->id, $connection);
 
-            if ($alreadyApplied) {
+            if ($existing && $existing->status === 'active') {
                 throw new DuplicateApplicationException('You have already applied for this job.');
             }
 
@@ -313,18 +324,35 @@ class PublicApplicationService
             $stageName = $knockoutTriggered ? 'Rejected' : 'Applied';
             $stage = PipelineStage::on($connection)->where('job_id', $job->id)->where('name', $stageName)->first();
 
-            $application = Application::on($connection)->create([
-                'company_id' => $job->company_id,
-                'candidate_id' => $candidate->id,
-                'job_id' => $job->id,
-                'stage_id' => $stage?->id,
-                'status' => $knockoutTriggered ? 'rejected' : 'active',
-                'applied_at' => now(),
-                'rejected_at' => $knockoutTriggered ? now() : null,
-                'rejection_reason_internal' => $knockoutReason,
-                'lock_version' => 1,
-                'application_data' => $this->buildApplicationData($data),
-            ]);
+            if ($existing && $stage) {
+                // Hired / Rejected before and now applying again: the SAME application comes back (one person, one card
+                // per job). The new form replaces the old answers; what happened before stays in the activity log.
+                $application = $applications->reopen($existing, $stage->id, $connection, [
+                    'rejection_reason_internal' => $knockoutReason,
+                    'application_data' => $this->buildApplicationData($data),
+                ]);
+
+                $old = ApplicationAnswer::on($connection)->where('application_id', $application->id)->get();
+                foreach ($old as $row) {
+                    if ($row->answer_file_path) {
+                        $replacedFiles[] = ['disk' => $row->answer_file_disk, 'path' => $row->answer_file_path];
+                    }
+                }
+                ApplicationAnswer::on($connection)->where('application_id', $application->id)->delete();
+            } else {
+                $application = Application::on($connection)->create([
+                    'company_id' => $job->company_id,
+                    'candidate_id' => $candidate->id,
+                    'job_id' => $job->id,
+                    'stage_id' => $stage?->id,
+                    'status' => $knockoutTriggered ? 'rejected' : 'active',
+                    'applied_at' => now(),
+                    'rejected_at' => $knockoutTriggered ? now() : null,
+                    'rejection_reason_internal' => $knockoutReason,
+                    'lock_version' => 1,
+                    'application_data' => $this->buildApplicationData($data),
+                ]);
+            }
 
             $this->storeAnswers($application, $data['answers'] ?? [], $storedFiles, $connection);
 
@@ -335,7 +363,7 @@ class PublicApplicationService
                 'action' => 'candidate.applied',
                 'object_type' => 'application',
                 'object_id' => $application->id,
-                'metadata' => json_encode(['job_title' => $job->title, 'candidate_name' => $candidate->name]),
+                'metadata' => json_encode(['job_title' => $job->title, 'candidate_name' => $candidate->name, 'reapplied' => (bool) $existing]),
                 'created_at' => now(),
             ]);
 
