@@ -247,8 +247,14 @@ class LoginController extends Controller
         );
 
         if (!$result) {
+            // Tell the old device WHY it is being signed out when a newer login of the same account replaced it.
+            $replaced = $this->refreshTokens->wasReplaced($request->input('refresh_token'));
+
             return response()->json([
-                'message' => 'Your session has expired. Please log in again.',
+                'message' => $replaced
+                    ? 'You were signed out because your account was signed in on another device.'
+                    : 'Your session has expired. Please log in again.',
+                'code' => $replaced ? 'session_replaced' : 'session_expired',
             ], 401);
         }
 
@@ -298,8 +304,25 @@ class LoginController extends Controller
         return response()->json(['message' => 'Logged out from all devices.']);
     }
 
+    /**
+     * One device at a time (all roles): a new login ends the user's other sessions, so the old device is signed out.
+     * A Super Admin impersonation token is a separate support session and is left alone.
+     * The user row is locked so two logins at the same moment cannot both survive.
+     */
+    protected function endOtherSessions(User $user, string $connection): void
+    {
+        DB::connection($connection)->transaction(function () use ($user, $connection) {
+            User::on($connection)->whereKey($user->id)->lockForUpdate()->first();
+
+            $user->tokens()->where('name', '!=', 'impersonation')->delete();
+            $this->refreshTokens->revokeOtherSessions($connection, $user->id);
+        });
+    }
+
     protected function issueTokens(User $user, string $region, string $connection, Request $request)
     {
+        $this->endOtherSessions($user, $connection);
+
         $accessTokenResult = $user->createToken(
             'access',
             ['*'],

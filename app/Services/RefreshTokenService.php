@@ -4,11 +4,15 @@ namespace App\Services;
 
 use App\Models\User;
 use Illuminate\Support\Facades\DB;
+use Illuminate\Support\Facades\Schema;
 use Illuminate\Support\Str;
 
 class RefreshTokenService
 {
     protected const REFRESH_EXPIRY_DAYS = 30; // PRD Section 15 — 30-day session
+
+    /** `sessions.revoked_reason` of a session ended by a newer login of the same user. */
+    public const REPLACED = 'replaced';
 
     /**
      * Issues a fresh refresh token and records it in the `sessions` table
@@ -64,6 +68,12 @@ class RefreshTokenService
         }
 
         if ($session->revoked_at !== null) {
+            // Signed out because the same account logged in on another device (one device at a time): the
+            // newer login is legitimate, so this is NOT a stolen token and must not end the new session.
+            if (($session->revoked_reason ?? null) === self::REPLACED) {
+                return null;
+            }
+
             $this->revokeAllForUser($connection, $session->user_id);
             return null;
         }
@@ -104,6 +114,45 @@ class RefreshTokenService
         DB::connection(RegionResolver::connectionFor($region))->table('sessions')
             ->where('refresh_token_hash', hash('sha256', $raw))
             ->update(['revoked_at' => now()]);
+    }
+
+    /**
+     * One device at a time: ends every active session of the user, marked as "replaced" so the old device is told
+     * why it was signed out (and so its next refresh is not mistaken for token theft).
+     *
+     * Falls back to deleting the rows if `revoked_reason` has not been added to this database yet, so a login
+     * can never fail because the SQL / migration was not run.
+     */
+    public function revokeOtherSessions(string $connection, string $userId): void
+    {
+        $query = DB::connection($connection)->table('sessions')
+            ->where('user_id', $userId)
+            ->whereNull('revoked_at');
+
+        if (Schema::connection($connection)->hasColumn('sessions', 'revoked_reason')) {
+            $query->update(['revoked_at' => now(), 'revoked_reason' => self::REPLACED]);
+        } else {
+            $query->delete();
+        }
+    }
+
+    /** True when this refresh token belongs to a session that a newer login of the same user ended. */
+    public function wasReplaced(?string $refreshToken): bool
+    {
+        if (!$refreshToken) {
+            return false;
+        }
+
+        [$region, $raw] = $this->parse($refreshToken);
+        if (!$region) {
+            return false;
+        }
+
+        $session = DB::connection(RegionResolver::connectionFor($region))->table('sessions')
+            ->where('refresh_token_hash', hash('sha256', $raw))
+            ->first();
+
+        return $session !== null && $session->revoked_at !== null && ($session->revoked_reason ?? null) === self::REPLACED;
     }
 
     public function revokeAllForUser(string $connection, string $userId): void
