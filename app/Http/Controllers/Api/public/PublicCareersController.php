@@ -22,7 +22,7 @@ class PublicCareersController extends Controller
     protected const PUBLIC_JOB_FIELDS = [
         'id', 'title', 'department', 'description', 'location', 'location_type',
         'employment_type', 'compensation_enabled', 'compensation_type',
-        'compensation_value', 'about_company', 'benefits', 'team_info',
+        'compensation_value', 'about_role', 'key_responsibilities', 'requirements', 'about_company', 'benefits', 'team_info',
         'additional_sections', 'published_at',
     ];
 

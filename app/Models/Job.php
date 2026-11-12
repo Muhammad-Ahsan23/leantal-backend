@@ -15,7 +15,7 @@ class Job extends Model
     protected $fillable = [
         'company_id', 'title', 'department', 'description', 'location',
         'location_type', 'employment_type', 'compensation_enabled',
-        'compensation_type', 'compensation_value', 'about_company',
+        'compensation_type', 'compensation_value', 'about_role', 'key_responsibilities', 'requirements', 'about_company',
         'benefits', 'team_info', 'additional_sections', 'status',
         'assigned_user_id', 'created_by', 'published_at', 'closed_at',
         'application_fields',
@@ -114,5 +114,24 @@ class Job extends Model
 
         return $query->where('company_id', $user->company_id)
             ->where('assigned_user_id', $user->id);
+    }
+
+    /**
+     * The whole job text as plain paragraphs, for places that need ONE description (Google JobPosting data, job
+     * feeds). A job now keeps its text in About the Role / Key Responsibilities / Requirements; an older job may
+     * still carry the single free-text description, which comes first.
+     */
+    public function fullDescription(): string
+    {
+        $parts = [];
+        foreach ([null => 'description', 'About the Role' => 'about_role', 'Key Responsibilities' => 'key_responsibilities', 'Requirements' => 'requirements'] as $heading => $field) {
+            $text = trim((string) $this->getAttribute($field));
+            if ($text === '') {
+                continue;
+            }
+            $parts[] = $heading ? $heading."\n".$text : $text;
+        }
+
+        return implode("\n\n", $parts);
     }
 }

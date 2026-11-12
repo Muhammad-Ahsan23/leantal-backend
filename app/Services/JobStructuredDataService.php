@@ -32,7 +32,7 @@ class JobStructuredDataService
             '@context' => 'https://schema.org/',
             '@type' => 'JobPosting',
             'title' => $job->title,
-            'description' => $this->htmlDescription($job->description ?: $job->title),
+            'description' => $this->htmlDescription($job->fullDescription() ?: $job->title),
             'datePosted' => optional($job->published_at)->toDateString(),
             'employmentType' => self::EMPLOYMENT_TYPE_MAP[$job->employment_type] ?? 'OTHER',
             'hiringOrganization' => array_filter([

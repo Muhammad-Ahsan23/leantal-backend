@@ -53,7 +53,7 @@ class PublicJobFeedService
             ->where('company_id', $company['id'])
             ->where('status', 'published')
             ->orderByDesc('published_at')
-            ->get(['id', 'title', 'department', 'description', 'location', 'location_type', 'employment_type', 'published_at', 'updated_at']);
+            ->get(['id', 'title', 'department', 'description', 'about_role', 'key_responsibilities', 'requirements', 'location', 'location_type', 'employment_type', 'published_at', 'updated_at']);
 
         $w = new XMLWriter();
         $w->openMemory();
@@ -82,7 +82,7 @@ class PublicJobFeedService
             if (preg_match('/^[A-Za-z]{2}$/', (string) $company['country'])) {
                 $this->el($w, 'country', strtoupper($company['country']));
             }
-            $this->el($w, 'description', $job->description ?: $job->title);
+            $this->el($w, 'description', $job->fullDescription() ?: $job->title);
             if (isset(self::JOB_TYPES[$job->employment_type])) {
                 $this->el($w, 'jobtype', self::JOB_TYPES[$job->employment_type]);
             }
