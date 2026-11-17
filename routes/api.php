@@ -59,6 +59,7 @@ use App\Http\Controllers\Api\TaskController;
 use App\Http\Controllers\Api\TaskAttachmentController;
 use App\Http\Controllers\Api\UserController;
 use Illuminate\Support\Facades\Route;
+use App\Http\Controllers\Api\BulkEmailController;
 
 Route::post('/signup', [SignupController::class, 'store']);
 
@@ -172,6 +173,7 @@ Route::middleware('auth:sanctum')->group(function () {
     Route::get('/applications/{id}/answers/{answerId}/file-url', [ApplicationController::class, 'answerFileUrl']);
     Route::patch('/applications/{id}/stage', [ApplicationController::class, 'moveStage']);
     Route::post('/applications/bulk-stage', [ApplicationController::class, 'bulkMoveStage']);
+    Route::post('/applications/bulk-email', [BulkEmailController::class, 'store'])->middleware('throttle:6,1');
 
     Route::get('/tasks', [TaskController::class, 'index']);
     Route::post('/tasks', [TaskController::class, 'store']);
