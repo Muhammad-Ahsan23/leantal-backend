@@ -12,10 +12,13 @@ use App\Services\CaptchaService;
 use App\Services\PublicApplicationService;
 use App\Services\RegionResolver;
 use App\Services\RegionRoutingRepository;
+use App\Support\CacheVersion;
 use Illuminate\Http\Request;
+use Illuminate\Support\Facades\Cache;
 use Illuminate\Support\Facades\DB;
 use Illuminate\Support\Facades\Mail;
 use Illuminate\Support\Facades\RateLimiter;
+use Illuminate\Support\Str;
 
 class PublicCareersController extends Controller
 {
@@ -34,6 +37,12 @@ class PublicCareersController extends Controller
         protected ApplyOtpService $applyOtp,
     ) {}
 
+    // How long a public page is kept, and why it is safe: every change that shows on these pages (a job created, edited,
+    // published, paused, closed or deleted, or its application questions changed) bumps the company's "jobs" cache version
+    // (CacheVersion), which makes the old copy unreachable at once. Company name / website / description and department
+    // edits are not tied to that version, so those show up within this many seconds at the latest.
+    protected const PAGE_CACHE_SECONDS = 60;
+
     public function index(Request $request, string $companySlug)
     {
         $company = $this->resolveCompany($companySlug);
@@ -43,6 +52,28 @@ class PublicCareersController extends Controller
 
         $connection = RegionResolver::connectionFor($company['region']);
 
+        // Only the plain page (no search / filter) is cached: that is what nearly every visitor opens first. A request with
+        // free text in it is answered live, so nobody can fill the cache with endless made-up searches.
+        $filtered = false;
+        foreach (['department', 'location_type', 'employment_type', 'location', 'search'] as $filter) {
+            $value = $request->query($filter);
+            if ($value !== null && (!is_scalar($value) || trim((string) $value) !== '')) {
+                $filtered = true;
+                break;
+            }
+        }
+
+        if ($filtered) {
+            return response()->json($this->buildIndexPayload($request, $company, $connection));
+        }
+
+        $json = $this->cachedPayload("index:{$company['company_id']}", $company['company_id'], fn () => $this->buildIndexPayload($request, $company, $connection));
+
+        return $this->jsonString($json);
+    }
+
+    protected function buildIndexPayload(Request $request, array $company, string $connection): array
+    {
         $query = Job::on($connection)
             ->where('company_id', $company['company_id'])
             ->where('status', 'published');
@@ -83,7 +114,7 @@ class PublicCareersController extends Controller
             ->pluck('name')
             ->values();
 
-        return response()->json([
+        return [
             'jobs' => $jobs,
             'company' => [
                 'name' => $companyRow->name ?? null,
@@ -91,7 +122,7 @@ class PublicCareersController extends Controller
                 'description' => $companyRow->careers_description ?? null,
             ],
             'departments' => $departments,
-        ]);
+        ];
     }
 
     /** Only http(s) links are ever handed to the public page (never javascript: or similar). */
@@ -120,8 +151,25 @@ class PublicCareersController extends Controller
             return response()->json(['message' => 'Careers page not found.'], 404);
         }
 
+        // Job ids are UUIDs: anything else (a mistyped link, "undefined") cannot exist, and must not reach the database.
+        if (!Str::isUuid($jobId)) {
+            return response()->json(['message' => 'Job not found or no longer accepting applications.'], 404);
+        }
+
         $connection = RegionResolver::connectionFor($company['region']);
 
+        // A job that is not (or no longer) published gives null here: that answer is never cached.
+        $json = $this->cachedPayload("job:{$company['company_id']}:{$jobId}", $company['company_id'], fn () => $this->buildJobPayload($companySlug, $company, $jobId, $connection));
+
+        if ($json === null) {
+            return response()->json(['message' => 'Job not found or no longer accepting applications.'], 404);
+        }
+
+        return $this->jsonString($json);
+    }
+
+    protected function buildJobPayload(string $companySlug, array $company, string $jobId, string $connection): ?array
+    {
         $job = Job::on($connection)
             ->where('company_id', $company['company_id'])
             ->where('status', 'published')
@@ -129,7 +177,7 @@ class PublicCareersController extends Controller
             ->find($jobId, array_merge(self::PUBLIC_JOB_FIELDS, ['application_fields']));
 
         if (!$job) {
-            return response()->json(['message' => 'Job not found or no longer accepting applications.'], 404);
+            return null;
         }
 
         $questions = ApplicationQuestion::on($connection)
@@ -140,12 +188,63 @@ class PublicCareersController extends Controller
         $companyModel = \App\Models\Company::on($connection)->find($company['company_id']);
         $canonicalUrl = $this->structuredData->canonicalUrl($companySlug, $job->id);
 
-        return response()->json([
+        return [
             'job' => $job,
             'questions' => $questions,
             'structured_data' => $this->structuredData->build($job, $companySlug, $companyModel->name ?? '', $companyModel->country_code ?? null, $this->safeWebsite($companyModel->website ?? null)),
             'canonical_url' => $canonicalUrl,
-        ]);
+        ];
+    }
+
+    /**
+     * The finished JSON text of a public page, from the cache when it is there. The builder runs only on a miss, and a null
+     * answer (job not found) is not stored. The text itself is stored, so what visitors get is byte for byte what the
+     * builder produced. If the cache is unavailable the page is simply built live: caching must never take it down.
+     */
+    protected function cachedPayload(string $name, string $companyId, \Closure $build): ?string
+    {
+        $store = null;
+        $key = null;
+        $json = null;
+
+        try {
+            $store = Cache::store(config('cache.public_careers_store')); // null = the app's normal cache store
+            $key = "public_careers:{$name}:v".CacheVersion::get("company:{$companyId}:jobs");
+            $cached = $store->get($key);
+            $json = is_string($cached) ? $cached : null;
+        } catch (\Throwable $e) {
+            report($e);
+            $store = null;
+        }
+
+        if ($json !== null) {
+            return $json;
+        }
+
+        $payload = $build();
+        if ($payload === null) {
+            return null;
+        }
+
+        $json = json_encode($payload);
+        if ($json === false) {
+            throw new \JsonException('Public page could not be encoded: '.json_last_error_msg());
+        }
+
+        if ($store !== null) {
+            try {
+                $store->put($key, $json, self::PAGE_CACHE_SECONDS);
+            } catch (\Throwable $e) {
+                report($e);
+            }
+        }
+
+        return $json;
+    }
+
+    protected function jsonString(string $json)
+    {
+        return response($json, 200, ['Content-Type' => 'application/json']);
     }
 
     /**
