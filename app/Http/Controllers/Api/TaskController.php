@@ -39,6 +39,8 @@ class TaskController extends Controller
             'status' => ['nullable', 'in:open,completed,all'],
             'search' => ['nullable', 'string', 'max:100'],
             'assigned_user_id' => ['nullable', 'uuid'],
+            'due_before' => ['nullable', 'date_format:Y-m-d'],
+            'due_on' => ['nullable', 'date_format:Y-m-d'],
             'page' => ['nullable', 'integer', 'min:1'],
             'per_page' => ['nullable', 'integer', 'min:1', 'max:100'],
         ]);
@@ -77,6 +79,15 @@ class TaskController extends Controller
             $query->where('status', '!=', 'done');
         } elseif ($status === 'completed') {
             $query->where('status', 'done');
+        }
+
+        // Dashboard "Next Actions": tasks overdue (due_before = the viewer's today) or due on a given day. The date comes from
+        // the browser, so "today" is the person's own day, not the server's. Tasks with no due date never match either filter.
+        if ($dueBefore = $request->query('due_before')) {
+            $query->whereDate('due_date', '<', $dueBefore);
+        }
+        if ($dueOn = $request->query('due_on')) {
+            $query->whereDate('due_date', '=', $dueOn);
         }
 
         if (!$request->has('page') && !$request->has('per_page')) {

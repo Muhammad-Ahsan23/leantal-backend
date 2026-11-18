@@ -26,12 +26,43 @@ class LoginController extends Controller
     protected const RESEND_MAX_PER_WINDOW = 5;     // per 10 minutes
     protected const RESEND_WINDOW_MINUTES = 30;    // how long after the password step a resend is still allowed
 
+    // Failed password attempts are counted three ways, and a login is refused when ANY of them is full:
+    //  - this email from this IP     (stops guessing one account from one machine)
+    //  - this email from anywhere    (stops guessing one account from many machines; higher, so a stranger cannot lock you out quickly)
+    //  - this IP across all emails   (stops one machine trying many accounts - credential stuffing; generous, an office shares one IP)
+    protected const LOGIN_PAIR_MAX = 5;            // per 60 seconds
+    protected const LOGIN_PAIR_DECAY = 60;
+    protected const LOGIN_EMAIL_MAX = 20;          // per 15 minutes
+    protected const LOGIN_EMAIL_DECAY = 900;
+    protected const LOGIN_IP_MAX = 30;             // per 10 minutes
+    protected const LOGIN_IP_DECAY = 600;
+
     public function __construct(
         protected CaptchaService $captcha,
         protected RegionRoutingRepository $routing,
         protected OtpService $otp,
         protected RefreshTokenService $refreshTokens,
     ) {}
+
+    /** Seconds until a login may be tried again, or 0 when none of the three limits is full. */
+    protected function loginLockedFor(string $pairKey, string $emailKey, string $ipKey): int
+    {
+        $wait = 0;
+        foreach ([[$pairKey, self::LOGIN_PAIR_MAX], [$emailKey, self::LOGIN_EMAIL_MAX], [$ipKey, self::LOGIN_IP_MAX]] as [$key, $max]) {
+            if (RateLimiter::tooManyAttempts($key, $max)) {
+                $wait = max($wait, RateLimiter::availableIn($key));
+            }
+        }
+
+        return $wait;
+    }
+
+    protected function hitLoginFailure(string $pairKey, string $emailKey, string $ipKey): void
+    {
+        RateLimiter::hit($pairKey, self::LOGIN_PAIR_DECAY);
+        RateLimiter::hit($emailKey, self::LOGIN_EMAIL_DECAY);
+        RateLimiter::hit($ipKey, self::LOGIN_IP_DECAY);
+    }
 
     /**
      * STEP 1 (PRD Section 15, steps 1-5): email + password + CAPTCHA ->
@@ -41,11 +72,17 @@ class LoginController extends Controller
     {
         $email = strtolower(trim($request->input('email')));
 
-        $throttleKey = 'login:'.$email;
-        if (RateLimiter::tooManyAttempts($throttleKey, 5)) {
+        $ip = (string) $request->ip();
+        $pairKey = 'login:'.$email.'|'.$ip;
+        $emailKey = 'login-email:'.$email;
+        $ipKey = 'login-ip:'.$ip;
+
+        $wait = $this->loginLockedFor($pairKey, $emailKey, $ipKey);
+        if ($wait > 0) {
             return response()->json([
-                'message' => 'Too many login attempts. Please try again in a minute.',
-            ], 429);
+                'message' => 'Too many login attempts. Please try again in '.($wait > 90 ? 'a few minutes' : 'a minute').'.',
+                'retry_after' => $wait,
+            ], 429)->header('Retry-After', (string) $wait);
         }
 
         if (!$this->captcha->verify($request->input('captcha_token'))) {
@@ -55,7 +92,7 @@ class LoginController extends Controller
         $region = $this->routing->findRegionByEmail($email);
 
         if (!$region) {
-            RateLimiter::hit($throttleKey, 60);
+            $this->hitLoginFailure($pairKey, $emailKey, $ipKey);
             return $this->invalidCredentials();
         }
 
@@ -63,12 +100,12 @@ class LoginController extends Controller
         $user = User::on($connection)->where('email', $email)->first();
 
         if (!$user || $user->status !== 'active') {
-            RateLimiter::hit($throttleKey, 60);
+            $this->hitLoginFailure($pairKey, $emailKey, $ipKey);
             return $this->invalidCredentials();
         }
 
         if (!Hash::check($request->input('password'), $user->password_hash)) {
-            RateLimiter::hit($throttleKey, 60);
+            $this->hitLoginFailure($pairKey, $emailKey, $ipKey);
             Log::info('Failed login attempt', ['email' => $email]);
             return $this->invalidCredentials();
         }
@@ -81,17 +118,20 @@ class LoginController extends Controller
         // someone who hasn't proven they know valid credentials yet.
         $suspendedAt = DB::connection($connection)->table('companies')->where('id', $user->company_id)->value('suspended_at');
         if ($suspendedAt) {
-            RateLimiter::hit($throttleKey, 60);
+            $this->hitLoginFailure($pairKey, $emailKey, $ipKey);
             return response()->json(['message' => 'This account has been suspended. Please contact support.'], 403);
         }
 
         // PRD Section 71 — a deleted company must not be able to log in again.
         if ($this->companyIsDeleted($connection, $user->company_id)) {
-            RateLimiter::hit($throttleKey, 60);
+            $this->hitLoginFailure($pairKey, $emailKey, $ipKey);
             return response()->json(['message' => 'This company account has been deleted.'], 403);
         }
 
-        RateLimiter::clear($throttleKey);
+        // A correct password resets this person's own counters. The IP counter is NOT reset: otherwise an attacker could log
+        // into an account of their own between guesses and start again from zero.
+        RateLimiter::clear($pairKey);
+        RateLimiter::clear($emailKey);
 
         $otpSendKey = 'otp-send:'.$email;
         if (RateLimiter::tooManyAttempts($otpSendKey, 3)) {
