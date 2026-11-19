@@ -83,7 +83,7 @@ class BillingController extends Controller
                     $data['interval']
                 );
 
-                $company->update(['plan' => $data['plan']]);
+                $company->update(['plan' => $data['plan'], 'billing_interval' => $data['interval']]);
 
                 return response()->json(['message' => 'Plan changed successfully.', 'subscription' => $result]);
             }

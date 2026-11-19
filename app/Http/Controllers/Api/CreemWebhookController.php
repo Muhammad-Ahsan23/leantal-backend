@@ -42,6 +42,12 @@ class CreemWebhookController extends Controller
         'subscription.paid',
     ];
 
+    /**
+     * Creem fires this when the subscription's product changes, whoever changed it (our Billing page, the customer
+     * portal, or the Creem dashboard). It carries the CURRENT product, so it keeps the plan in step.
+     */
+    protected const EVENT_UPDATED = 'subscription.update';
+
     /** Terminal, merchant/customer-initiated cancellation. */
     protected const EVENT_CANCELED = 'subscription.canceled';
 
@@ -69,7 +75,6 @@ class CreemWebhookController extends Controller
         'subscription.scheduled_cancel',
         'subscription.trialing',
         'subscription.paused',
-        'subscription.update',
         'refund.created',
         'dispute.created',
     ];
@@ -117,6 +122,8 @@ class CreemWebhookController extends Controller
             Log::warning('Creem webhook: no company_id in metadata', ['event_id' => $eventId, 'event_type' => $eventType]);
         } elseif (in_array($eventType, self::EVENTS_ACTIVATE, true)) {
             $this->activateSubscription($companyId, $object);
+        } elseif ($eventType === self::EVENT_UPDATED) {
+            $this->syncPlanFromProduct($companyId, $object);
         } elseif ($eventType === self::EVENT_CANCELED) {
             $this->updateCompany($companyId, ['subscription_status' => 'cancelled']);
         } elseif ($eventType === self::EVENT_PAST_DUE) {
@@ -187,7 +194,9 @@ class CreemWebhookController extends Controller
      */
     protected function activateSubscription(string $companyId, array $object): void
     {
-        $plan = $object['metadata']['plan'] ?? null;
+        // The product on the event is the plan the customer is on NOW. metadata.plan only records the plan picked at the
+        // first checkout, so after any upgrade it is stale; it stays as a fallback for events without a product.
+        $plan = $this->planFromObject($object) ?? ($object['metadata']['plan'] ?? null);
         $customerId = $object['customer']['id'] ?? null;
 
         $subscriptionId = ($object['object'] ?? null) === 'subscription'
@@ -197,12 +206,59 @@ class CreemWebhookController extends Controller
         $this->updateCompany($companyId, array_filter([
             'subscription_status' => 'active',
             'plan' => $plan,
+            // Product first; metadata.interval (set at the first checkout) only when the event has no known product.
+            'billing_interval' => $this->intervalFromObject($object) ?? ($object['metadata']['interval'] ?? null),
             'creem_customer_id' => $customerId,
             'creem_subscription_id' => $subscriptionId,
         ]) + [
             // A successful payment ends any grace period. (Added after array_filter, which drops nulls.)
             'past_due_since' => null,
         ]);
+    }
+
+    /**
+     * The plan key for the product on a Creem event, or null when the event has no product or it is not one of ours.
+     * Creem sends the product as an object (object.product.id); a plain id string is accepted too.
+     */
+    protected function planFromObject(array $object): ?string
+    {
+        $productId = $this->productIdFromObject($object);
+
+        return $productId !== null ? $this->creem->planFromProductId($productId) : null;
+    }
+
+    /** "monthly" or "yearly" for the product on a Creem event, or null when unknown. */
+    protected function intervalFromObject(array $object): ?string
+    {
+        $productId = $this->productIdFromObject($object);
+
+        return $productId !== null ? $this->creem->intervalFromProductId($productId) : null;
+    }
+
+    protected function productIdFromObject(array $object): ?string
+    {
+        $product = $object['product'] ?? ($object['subscription']['product'] ?? null);
+        $productId = is_array($product) ? ($product['id'] ?? null) : $product;
+
+        return is_string($productId) && $productId !== '' ? $productId : null;
+    }
+
+    /**
+     * subscription.update: move the company to the plan of the event's product, so a change made in the customer portal or
+     * the Creem dashboard reaches the app. Only a live subscription is touched; the status is never changed here.
+     */
+    protected function syncPlanFromProduct(string $companyId, array $object): void
+    {
+        $plan = $this->planFromObject($object);
+
+        if ($plan === null) {
+            Log::info('Creem webhook: subscription.update has no known product, plan left as is', ['company_id' => $companyId]);
+            return;
+        }
+
+        $interval = $this->intervalFromObject($object);
+
+        $this->transition($companyId, ['active', 'past_due'], fn () => array_filter(['plan' => $plan, 'billing_interval' => $interval]));
     }
 
     /**

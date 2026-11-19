@@ -38,6 +38,7 @@ class Company extends Model
         'seat_limit_override',
         'job_limit_override',
         'candidate_limit_override',
+        'billing_interval',
     ];
 
     protected $casts = [

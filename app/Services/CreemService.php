@@ -130,10 +130,33 @@ class CreemService
             ]);
 
         if (!$response->successful()) {
-            throw new \RuntimeException('Creem plan change failed: '.$response->body());
+            // The raw provider response goes to the log only; the customer gets a plain message.
+            Log::warning('Creem plan change failed', [
+                'subscription_id' => $subscriptionId,
+                'from' => $currentPlan,
+                'to' => $newPlan,
+                'http_status' => $response->status(),
+                'body' => $response->body(),
+            ]);
+
+            throw new \RuntimeException(self::planChangeErrorMessage($response->status(), $response->body()));
         }
 
         return $response->json();
+    }
+
+    /**
+     * Customer-safe text for a failed plan change. A payment problem (HTTP 402 or a
+     * card/payment/decline wording in Creem's reply) gets a card-specific message;
+     * anything else gets a generic one. Either way the plan has not changed.
+     */
+    public static function planChangeErrorMessage(int $status, string $body): string
+    {
+        if ($status === 402 || preg_match('/declin|insufficient|funds|card|payment|charge/i', $body)) {
+            return 'Your payment could not be processed, so your plan was not changed. Please check your card details or use a different card, then try again.';
+        }
+
+        return "We couldn't change your plan right now, and your plan was not changed. Please try again in a few minutes or contact support.";
     }
 
     /**
@@ -208,6 +231,25 @@ class CreemService
         foreach ($products as $key => $id) {
             if ($id === $productId) {
                 return explode('_', $key)[0]; // "starter_monthly" -> "starter"
+            }
+        }
+
+        return null;
+    }
+
+    /**
+     * "monthly" or "yearly" for a Creem product_id, read from the same product key as planFromProductId()
+     * ("starter_monthly" -> "monthly"); null when the product is not one of ours.
+     */
+    public function intervalFromProductId(string $productId): ?string
+    {
+        $products = config('services.creem.products', []);
+
+        foreach ($products as $key => $id) {
+            if ($id === $productId) {
+                $interval = explode('_', $key)[1] ?? null;
+
+                return in_array($interval, ['monthly', 'yearly'], true) ? $interval : null;
             }
         }
 

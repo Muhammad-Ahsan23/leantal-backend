@@ -162,7 +162,8 @@ class EmailService
         ?Job $job,
         ?Interview $interview,
         string $companyName,
-        string $connection
+        string $connection,
+        array $files = []
     ): Email {
         // PRD Rule 2 — "Every LeanTal user connects their own Gmail OR
         // Outlook account." Whichever one this actor has connected is
@@ -195,11 +196,13 @@ class EmailService
 
         $this->assertNoUnfilledPlaceholders($subject, $body);
 
+        ['attachments' => $attachments, 'meta' => $meta] = $this->readAttachments($files);
+
         $provider = $googleToken ? 'gmail' : 'outlook';
         if ($googleToken) {
-            $this->gmail->sendEmail($googleToken, $candidate->email, $subject, $body);
+            $this->gmail->sendEmail($googleToken, $candidate->email, $subject, $body, $attachments);
         } else {
-            $this->microsoftMail->sendEmail($microsoftToken, $candidate->email, $subject, $body);
+            $this->microsoftMail->sendEmail($microsoftToken, $candidate->email, $subject, $body, $attachments);
         }
 
         $email = Email::on($connection)->create([
@@ -210,6 +213,7 @@ class EmailService
             'provider' => $provider,
             'subject' => $subject,
             'body' => $body,
+            'attachments' => $meta ?: null,
             'sent_at' => now(),
         ]);
 
@@ -220,6 +224,26 @@ class EmailService
         $this->logActivity($connection, $candidate->company_id, $actor->id, 'candidate.email_sent', $candidate->id, ['subject' => $subject]);
 
         return $email;
+    }
+
+    /**
+     * Uploaded files -> what the mail providers need (raw content) and what is kept on the email (names and sizes only).
+     *
+     * @param \Illuminate\Http\UploadedFile[] $files
+     * @return array{attachments: array<int, array{name: string, mime: string, data: string}>, meta: array<int, array{name: string, size: int, mime: string}>}
+     */
+    protected function readAttachments(array $files): array
+    {
+        $attachments = [];
+        $meta = [];
+        foreach ($files as $file) {
+            $name = preg_replace('#[\x00-\x1F"\\\\/]+#', '_', $file->getClientOriginalName()) ?: 'attachment';
+            $mime = $file->getMimeType() ?: 'application/octet-stream';
+            $attachments[] = ['name' => $name, 'mime' => $mime, 'data' => (string) file_get_contents($file->getRealPath())];
+            $meta[] = ['name' => $name, 'size' => $file->getSize(), 'mime' => $mime];
+        }
+
+        return ['attachments' => $attachments, 'meta' => $meta];
     }
 
     /**
@@ -243,14 +267,7 @@ class EmailService
 
         $recipients = array_values(array_map('strtolower', $recipients));
 
-        $attachments = [];
-        $meta = [];
-        foreach ($files as $file) {
-            $name = preg_replace('#[\x00-\x1F"\\\\/]+#', '_', $file->getClientOriginalName()) ?: 'attachment';
-            $mime = $file->getMimeType() ?: 'application/octet-stream';
-            $attachments[] = ['name' => $name, 'mime' => $mime, 'data' => (string) file_get_contents($file->getRealPath())];
-            $meta[] = ['name' => $name, 'size' => $file->getSize(), 'mime' => $mime];
-        }
+        ['attachments' => $attachments, 'meta' => $meta] = $this->readAttachments($files);
 
         // What the person typed is plain text: escape it, and keep their line breaks.
         $html = nl2br(e($body), false);

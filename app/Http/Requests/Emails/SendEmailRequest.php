@@ -11,6 +11,16 @@ class SendEmailRequest extends FormRequest
         return true;
     }
 
+    public function messages(): array
+    {
+        return [
+            'attachments.max' => 'You can attach at most '.ComposeEmailRequest::MAX_FILES.' files.',
+            'attachments.*.max' => 'Each file must be 3 MB or smaller.',
+            'attachments.*.mimes' => 'This file type cannot be attached. Use PDF, Word, Excel, PowerPoint, text, CSV or an image.',
+            'attachments.*.uploaded' => 'A file could not be uploaded. Please try again.',
+        ];
+    }
+
     public function rules(): array
     {
         return [
@@ -39,6 +49,9 @@ class SendEmailRequest extends FormRequest
             'direction' => ['nullable', 'in:outbound,inbound'],
             'provider' => ['nullable', 'in:gmail,outlook'],
             'sent_at' => ['nullable', 'date'],
+            // Files to send with the email. Only for mode=send_personal (the user's own mailbox); same limits as Compose.
+            'attachments' => ['nullable', 'array', 'max:'.ComposeEmailRequest::MAX_FILES],
+            'attachments.*' => ['file', 'max:'.ComposeEmailRequest::MAX_KB, 'mimes:'.ComposeEmailRequest::ALLOWED_TYPES],
         ];
     }
 }

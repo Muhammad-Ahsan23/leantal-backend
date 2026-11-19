@@ -125,6 +125,18 @@ class EmailController extends Controller
         }
 
         $data = $request->validated();
+        $files = $request->file('attachments') ?? [];
+
+        if ($files) {
+            // Files go out only from the user's own mailbox: the system address and "log" have nowhere to put them.
+            if ($data['mode'] !== 'send_personal') {
+                return response()->json(['message' => 'Files can only be attached to an email sent from your own mailbox.'], 422);
+            }
+            if (array_sum(array_map(fn ($f) => $f->getSize(), $files)) > ComposeEmailRequest::MAX_KB * 1024) {
+                return response()->json(['message' => 'The files together must be 3 MB or smaller.', 'errors' => ['attachments' => ['The files together must be 3 MB or smaller.']]], 422);
+            }
+        }
+
         $company = Company::on($connection)->find($user->company_id);
         $job = null;
         $interview = null;
@@ -171,7 +183,7 @@ class EmailController extends Controller
             $email = match ($data['mode']) {
                 'send_personal' => $this->emails->sendPersonalEmail(
                     $candidate, $user, $data['template_id'] ?? null, $data['subject'] ?? null, $data['body'] ?? null,
-                    $job, $interview, $company->name, $connection
+                    $job, $interview, $company->name, $connection, $files
                 ),
                 'send_system' => $this->emails->sendSystemEmail(
                     $candidate, $data['template_id'] ?? null, $data['subject'] ?? null, $data['body'] ?? null,
@@ -190,6 +202,7 @@ class EmailController extends Controller
                 'template_id' => $data['template_id'] ?? null,
                 'subject' => $data['subject'] ?? null,
                 'body' => $data['body'] ?? null,
+                'attachment_count' => count($files), // a retry re-sends the text only: the files are not kept
                 'user_id' => $user->id,
             ]);
 
