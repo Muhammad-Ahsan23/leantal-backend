@@ -45,13 +45,15 @@ class GmailService
     }
 
     /**
+     * @param string|string[] $to one address or several
+     * @param array<int, array{name: string, mime: string, data: string}> $attachments raw file contents
      * @throws \RuntimeException on failure
      */
-    public function sendEmail(OAuthToken $token, string $to, string $subject, string $htmlBody): void
+    public function sendEmail(OAuthToken $token, string|array $to, string $subject, string $htmlBody, array $attachments = []): void
     {
         $accessToken = $this->ensureFreshToken($token);
 
-        $raw = $this->buildRawMessage($to, $subject, $htmlBody);
+        $raw = $this->buildRawMessage($to, $subject, $htmlBody, $attachments);
 
         $response = Http::withToken($accessToken)
             ->post('https://gmail.googleapis.com/gmail/v1/users/me/messages/send', [
@@ -71,16 +73,39 @@ class GmailService
      * authenticated account as sender regardless, so specifying one
      * ourselves would be redundant at best.
      */
-    protected function buildRawMessage(string $to, string $subject, string $htmlBody): string
+    protected function buildRawMessage(string|array $to, string $subject, string $htmlBody, array $attachments = []): string
     {
         $encodedSubject = '=?utf-8?B?'.base64_encode($subject).'?=';
+        // Addresses were validated upstream; stripping line breaks and commas here makes header injection impossible anyway.
+        $recipients = implode(', ', array_map(fn ($a) => str_replace(["\r", "\n", ','], '', $a), (array) $to));
 
-        $message = "To: {$to}\r\n";
+        $message = "To: {$recipients}\r\n";
         $message .= "Subject: {$encodedSubject}\r\n";
         $message .= "MIME-Version: 1.0\r\n";
-        $message .= "Content-Type: text/html; charset=utf-8\r\n";
-        $message .= "\r\n";
-        $message .= $htmlBody;
+
+        if (!$attachments) {
+            $message .= "Content-Type: text/html; charset=utf-8\r\n";
+            $message .= "\r\n";
+            $message .= $htmlBody;
+        } else {
+            $boundary = '=_leantal_'.bin2hex(random_bytes(12));
+            $message .= "Content-Type: multipart/mixed; boundary=\"{$boundary}\"\r\n\r\n";
+            $message .= "--{$boundary}\r\n";
+            $message .= "Content-Type: text/html; charset=utf-8\r\n";
+            $message .= "Content-Transfer-Encoding: base64\r\n\r\n";
+            $message .= chunk_split(base64_encode($htmlBody), 76, "\r\n");
+            foreach ($attachments as $file) {
+                $name = str_replace(['"', "\r", "\n", '\\'], '', $file['name']);
+                $encodedName = '=?utf-8?B?'.base64_encode($name).'?=';
+                $mime = preg_match('#^[\w.+-]+/[\w.+-]+$#', $file['mime'] ?? '') ? $file['mime'] : 'application/octet-stream';
+                $message .= "--{$boundary}\r\n";
+                $message .= "Content-Type: {$mime}; name=\"{$encodedName}\"\r\n";
+                $message .= "Content-Disposition: attachment; filename=\"{$encodedName}\"\r\n";
+                $message .= "Content-Transfer-Encoding: base64\r\n\r\n";
+                $message .= chunk_split(base64_encode($file['data']), 76, "\r\n");
+            }
+            $message .= "--{$boundary}--\r\n";
+        }
 
         return rtrim(strtr(base64_encode($message), '+/', '-_'), '=');
     }

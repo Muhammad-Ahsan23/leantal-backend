@@ -74,6 +74,7 @@ class CompanyController extends Controller
         return $company->toArray() + [
             'seat_limit' => $company->seatLimit(),
             'job_limit' => $company->jobLimit(),
+            'candidate_limit' => $company->candidateLimit(),
         ];
     }
 

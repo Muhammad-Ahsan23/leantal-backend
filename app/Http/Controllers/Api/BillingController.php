@@ -4,6 +4,7 @@ namespace App\Http\Controllers\Api;
 
 use App\Http\Controllers\Controller;
 use App\Http\Requests\Billing\CreateCheckoutRequest;
+use App\Models\Candidate;
 use App\Models\Company;
 use App\Models\Job;
 use App\Models\User;
@@ -116,9 +117,10 @@ class BillingController extends Controller
         // write if something below throws.
         $simulated = $company->replicate();
         $simulated->plan = $newPlan;
-        // A plan change drops the seat/job overrides (Company::booted), so the check must judge the plan's own limits.
+        // A plan change drops the seat/job/candidate overrides (Company::booted), so the check must judge the plan's own limits.
         $simulated->seat_limit_override = null;
         $simulated->job_limit_override = null;
+        $simulated->candidate_limit_override = null;
 
         $newSeatLimit = $simulated->seatLimit();
         if ($newSeatLimit !== null) {
@@ -133,6 +135,14 @@ class BillingController extends Controller
             $activeJobs = Job::on($connection)->where('company_id', $company->id)->whereIn('status', ['draft', 'published', 'paused'])->count();
             if ($activeJobs > $newJobLimit) {
                 return "Cannot downgrade to this plan — you currently have {$activeJobs} active jobs, which exceeds the {$newJobLimit}-job limit. Close or archive excess jobs first.";
+            }
+        }
+
+        $newCandidateLimit = $simulated->candidateLimit();
+        if ($newCandidateLimit !== null) {
+            $candidates = Candidate::on($connection)->where('company_id', $company->id)->count();
+            if ($candidates > $newCandidateLimit) {
+                return "Cannot downgrade to this plan — you currently have ".number_format($candidates)." candidates, which exceeds the ".number_format($newCandidateLimit)."-candidate limit. Delete candidates you no longer need first.";
             }
         }
 

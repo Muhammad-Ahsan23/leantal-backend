@@ -2,6 +2,7 @@
 
 namespace App\Http\Controllers\Api\Public;
 
+use App\Exceptions\CandidateLimitReachedException;
 use App\Exceptions\DuplicateApplicationException;
 use App\Http\Controllers\Controller;
 use App\Http\Requests\Public\SubmitApplicationRequest;
@@ -362,6 +363,9 @@ class PublicCareersController extends Controller
             $this->applications->submit($job, $data, $connection, $resume, $request->file('answer_files') ?? []);
         } catch (DuplicateApplicationException $e) {
             return response()->json(['message' => $e->getMessage()], 422);
+        } catch (CandidateLimitReachedException $e) {
+            // The company's plan message ("Upgrade...") is for the company, not for an applicant: they get a neutral one.
+            return response()->json(['message' => 'This company is not accepting new applications right now. Please try again later.'], 422);
         }
 
         return response()->json([

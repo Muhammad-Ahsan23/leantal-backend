@@ -223,6 +223,72 @@ class EmailService
     }
 
     /**
+     * Compose: sends an email to ANY address(es) from the actor's own connected Gmail/Outlook, with optional attachments.
+     * Never from the system address. The message is recorded as the actor's personal mail (user_id = actor) with who it
+     * went to and the attachment names. If one of the recipients is a candidate of this company that the actor may work
+     * with, the email is also linked to that candidate, so it shows in their conversation like any other email.
+     *
+     * @param string[] $recipients validated, distinct e-mail addresses
+     * @param \Illuminate\Http\UploadedFile[] $files
+     * @throws \RuntimeException when no mailbox is connected, or the provider refuses the send
+     */
+    public function composeEmail(User $actor, array $recipients, string $subject, string $body, array $files, string $connection): Email
+    {
+        $googleToken = OAuthToken::on($connection)->where('user_id', $actor->id)->where('provider', 'google')->whereNull('disconnected_at')->first();
+        $microsoftToken = OAuthToken::on($connection)->where('user_id', $actor->id)->where('provider', 'microsoft')->whereNull('disconnected_at')->first();
+
+        if (!$googleToken && !$microsoftToken) {
+            throw new \RuntimeException('Connect your Gmail or Outlook account first (Settings > Integrations) to send from your own inbox.');
+        }
+
+        $recipients = array_values(array_map('strtolower', $recipients));
+
+        $attachments = [];
+        $meta = [];
+        foreach ($files as $file) {
+            $name = preg_replace('#[\x00-\x1F"\\\\/]+#', '_', $file->getClientOriginalName()) ?: 'attachment';
+            $mime = $file->getMimeType() ?: 'application/octet-stream';
+            $attachments[] = ['name' => $name, 'mime' => $mime, 'data' => (string) file_get_contents($file->getRealPath())];
+            $meta[] = ['name' => $name, 'size' => $file->getSize(), 'mime' => $mime];
+        }
+
+        // What the person typed is plain text: escape it, and keep their line breaks.
+        $html = nl2br(e($body), false);
+
+        $provider = $googleToken ? 'gmail' : 'outlook';
+        if ($googleToken) {
+            $this->gmail->sendEmail($googleToken, $recipients, $subject, $html, $attachments);
+        } else {
+            $this->microsoftMail->sendEmail($microsoftToken, $recipients, $subject, $html, $attachments);
+        }
+
+        $candidate = Candidate::on($connection)
+            ->where('company_id', $actor->company_id)
+            ->whereIn('normalized_email', $recipients)
+            ->get()
+            ->first(fn (Candidate $c) => $actor->can('update', $c));
+
+        $email = Email::on($connection)->create([
+            'company_id' => $actor->company_id,
+            'user_id' => $actor->id,
+            'candidate_id' => $candidate?->id,
+            'direction' => 'outbound',
+            'provider' => $provider,
+            'subject' => $subject,
+            'body' => $html,
+            'to_emails' => array_map(fn ($a) => ['email' => $a], $recipients),
+            'attachments' => $meta ?: null,
+            'sent_at' => now(),
+        ]);
+
+        if ($candidate) {
+            $this->logActivity($connection, $actor->company_id, $actor->id, 'candidate.email_sent', $candidate->id, ['subject' => $subject]);
+        }
+
+        return $email;
+    }
+
+    /**
      * For when a staff member sent an email from their own Gmail/
      * Outlook through some OTHER means (not via this system's send
      * button) but still wants it tracked on the candidate's timeline —

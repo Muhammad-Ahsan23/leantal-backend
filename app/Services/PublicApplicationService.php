@@ -292,6 +292,9 @@ class PublicApplicationService
                 ->first();
 
             if (!$candidate) {
+                // A company at its candidate limit stops taking NEW people (people already in it can still re-apply).
+                app(CandidateService::class)->assertCandidateLimitNotReached($connection, $job->company_id);
+
                 $candidate = Candidate::on($connection)->create([
                     'company_id' => $job->company_id,
                     'name' => $data['name'],

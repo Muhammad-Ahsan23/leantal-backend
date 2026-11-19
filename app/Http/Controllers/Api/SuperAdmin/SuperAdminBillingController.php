@@ -4,6 +4,7 @@ namespace App\Http\Controllers\Api\SuperAdmin;
 
 use App\Http\Controllers\Api\SuperAdmin\Concerns\ResolvesCompany;
 use App\Http\Controllers\Controller;
+use App\Models\Candidate;
 use App\Models\Company;
 use App\Models\CompanyNote;
 use App\Models\Job;
@@ -49,14 +50,18 @@ class SuperAdminBillingController extends Controller
             'usage' => [
                 'users' => User::on($connection)->where('company_id', $companyId)->where('status', 'active')->count(),
                 'jobs' => Job::on($connection)->where('company_id', $companyId)->whereIn('status', ['draft', 'published', 'paused'])->count(),
+                'candidates' => Candidate::on($connection)->where('company_id', $companyId)->count(),
             ],
             'limits' => [
                 'seats' => $company->seatLimit(),
                 'jobs' => $company->jobLimit(),
+                'candidates' => $company->candidateLimit(),
                 'plan_seats' => $company->planSeatLimit(),
                 'plan_jobs' => $company->planJobLimit(),
+                'plan_candidates' => $company->planCandidateLimit(),
                 'seat_override' => $company->seat_limit_override,
                 'job_override' => $company->job_limit_override,
+                'candidate_override' => $company->candidate_limit_override,
             ],
             'subscription' => $subscription,
             'events' => $events,
@@ -95,8 +100,8 @@ class SuperAdminBillingController extends Controller
         if ($data['plan'] !== 'free' && in_array($company->subscription_status, ['trialing', 'read_only'], true)) {
             $update['subscription_status'] = 'active';
         }
-        // A plan change drops any seat/job override (Company::booted); the audit entry records what was dropped.
-        foreach (['seat_limit_override', 'job_limit_override'] as $column) {
+        // A plan change drops any seat/job/candidate override (Company::booted); the audit entry records what was dropped.
+        foreach (['seat_limit_override', 'job_limit_override', 'candidate_limit_override'] as $column) {
             if ($company->$column !== null) {
                 $before[$column] = $company->$column;
                 $update[$column] = null;
@@ -111,13 +116,14 @@ class SuperAdminBillingController extends Controller
         return response()->json(['message' => 'Plan changed.', 'plan' => $company->plan, 'subscription_status' => $company->subscription_status]);
     }
 
-    /** Company-specific seat/job limits. A key left out is untouched; null = back to the plan's limit; -1 = unlimited. */
+    /** Company-specific seat/job/candidate limits. A key left out is untouched; null = back to the plan's limit; -1 = unlimited. */
     public function setLimits(Request $request, string $companyId)
     {
         $rule = ['nullable', 'integer', 'min:-1', 'max:100000', 'not_in:0'];
         $data = $request->validate([
             'seat_limit' => $rule,
             'job_limit' => $rule,
+            'candidate_limit' => $rule,
             'reason' => ['required', 'string', 'max:500'],
         ]);
 
@@ -127,7 +133,7 @@ class SuperAdminBillingController extends Controller
         }
 
         $changes = [];
-        foreach (['seat_limit' => 'seat_limit_override', 'job_limit' => 'job_limit_override'] as $input => $column) {
+        foreach (['seat_limit' => 'seat_limit_override', 'job_limit' => 'job_limit_override', 'candidate_limit' => 'candidate_limit_override'] as $input => $column) {
             if ($request->exists($input)) {
                 $changes[$column] = ['from' => $company->$column, 'to' => $data[$input]];
                 $company->$column = $data[$input];
@@ -143,7 +149,7 @@ class SuperAdminBillingController extends Controller
             'changes' => $changes, 'reason' => $data['reason'],
         ]);
 
-        return response()->json(['message' => 'Limits updated.', 'seats' => $company->seatLimit(), 'jobs' => $company->jobLimit()]);
+        return response()->json(['message' => 'Limits updated.', 'seats' => $company->seatLimit(), 'jobs' => $company->jobLimit(), 'candidates' => $company->candidateLimit()]);
     }
 
     public function addNote(Request $request, string $companyId)

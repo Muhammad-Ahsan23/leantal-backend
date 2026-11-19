@@ -36,18 +36,31 @@ class MicrosoftGraphMailService
     }
 
     /**
+     * @param string|string[] $to one address or several
+     * @param array<int, array{name: string, mime: string, data: string}> $attachments raw file contents; sent inline, so the
+     *   caller keeps the total small (Graph's sendMail request limit is about 4 MB, base64 included)
      * @throws \RuntimeException on failure
      */
-    public function sendEmail(OAuthToken $token, string $to, string $subject, string $htmlBody): void
+    public function sendEmail(OAuthToken $token, string|array $to, string $subject, string $htmlBody, array $attachments = []): void
     {
         $accessToken = $this->ensureFreshToken($token);
 
+        $message = [
+            'subject' => $subject,
+            'body' => ['contentType' => 'HTML', 'content' => $htmlBody],
+            'toRecipients' => array_map(fn ($a) => ['emailAddress' => ['address' => $a]], array_values((array) $to)),
+        ];
+        if ($attachments) {
+            $message['attachments'] = array_map(fn ($f) => [
+                '@odata.type' => '#microsoft.graph.fileAttachment',
+                'name' => $f['name'],
+                'contentType' => $f['mime'] ?: 'application/octet-stream',
+                'contentBytes' => base64_encode($f['data']),
+            ], $attachments);
+        }
+
         $response = Http::withToken($accessToken)->post('https://graph.microsoft.com/v1.0/me/sendMail', [
-            'message' => [
-                'subject' => $subject,
-                'body' => ['contentType' => 'HTML', 'content' => $htmlBody],
-                'toRecipients' => [['emailAddress' => ['address' => $to]]],
-            ],
+            'message' => $message,
             'saveToSentItems' => true,
         ]);
 

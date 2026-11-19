@@ -37,6 +37,7 @@ class Company extends Model
         'creem_subscription_id',
         'seat_limit_override',
         'job_limit_override',
+        'candidate_limit_override',
     ];
 
     protected $casts = [
@@ -58,7 +59,7 @@ class Company extends Model
     ];
 
     /**
-     * A Super Admin seat/job override is a deal made for ONE plan. When the plan changes (Creem webhook, checkout,
+     * A Super Admin seat/job/candidate override is a deal made for ONE plan. When the plan changes (Creem webhook, checkout,
      * manual change), the override is dropped, so a customer who upgrades never keeps a limit below what they now pay
      * for. Done here, in the model, so every place that changes the plan follows the same rule. A save that sets the
      * override itself keeps what it sets.
@@ -71,7 +72,7 @@ class Company extends Model
             }
 
             $dropped = [];
-            foreach (['seat_limit_override', 'job_limit_override'] as $column) {
+            foreach (['seat_limit_override', 'job_limit_override', 'candidate_limit_override'] as $column) {
                 if ($company->$column !== null && !$company->isDirty($column)) {
                     $dropped[$column] = $company->$column;
                     $company->$column = null;
@@ -96,13 +97,17 @@ class Company extends Model
 
     /**
      * PRD Section 9 — the plan list and prices, in ONE place (pricing page, Super Admin billing and MRR all read it).
-     * monthly = price per month billed monthly, yearly = price per month billed yearly. null limits = unlimited.
+     * monthly = price per month billed monthly, yearly = price per month billed yearly.
+     * Every SOLD plan has a hard limit on users, active jobs and candidates (no plan is unlimited: that was the abuse
+     * risk). A Super Admin can still raise any of them for one company (the *_limit_override columns).
+     * 'free' is the 72-hour trial only: it is not sold, so 'public' => false keeps it off the pricing page.
+     * Plan KEYS are unchanged on purpose: they are in the Creem product ids, the webhook metadata and the database.
      */
     public const PLAN_CATALOG = [
-        ['key' => 'free', 'name' => 'Free', 'monthly' => 0, 'yearly' => 0, 'jobs' => 1, 'users' => 1],
-        ['key' => 'starter', 'name' => 'Starter', 'monthly' => 19, 'yearly' => 15, 'jobs' => null, 'users' => 3],
-        ['key' => 'team', 'name' => 'Team', 'monthly' => 49, 'yearly' => 39, 'jobs' => null, 'users' => 15],
-        ['key' => 'scale', 'name' => 'Scale', 'monthly' => 99, 'yearly' => 79, 'jobs' => null, 'users' => null],
+        ['key' => 'free', 'name' => 'Free Trial', 'public' => false, 'monthly' => 0, 'yearly' => 0, 'users' => 1, 'jobs' => 1, 'candidates' => 100],
+        ['key' => 'starter', 'name' => '3 Users', 'public' => true, 'monthly' => 19, 'yearly' => 15, 'users' => 3, 'jobs' => 10, 'candidates' => 1500],
+        ['key' => 'team', 'name' => '10 Users', 'public' => true, 'monthly' => 39, 'yearly' => 31, 'users' => 10, 'jobs' => 25, 'candidates' => 7500],
+        ['key' => 'scale', 'name' => '25 Users', 'public' => true, 'monthly' => 69, 'yearly' => 55, 'users' => 25, 'jobs' => 50, 'candidates' => 25000],
     ];
 
     public const PLANS = ['free', 'starter', 'team', 'scale'];
@@ -126,20 +131,39 @@ class Company extends Model
         return $this->job_limit_override === null ? $this->planJobLimit() : ($this->job_limit_override < 0 ? null : $this->job_limit_override);
     }
 
-    /** What the plan itself allows, ignoring any override. */
+    /**
+     * Candidates the company may hold (archived ones count, deleted ones do not).
+     * Returns null for unlimited, which only a Super Admin override (-1) can give.
+     */
+    public function candidateLimit(): ?int
+    {
+        return $this->candidate_limit_override === null ? $this->planCandidateLimit() : ($this->candidate_limit_override < 0 ? null : $this->candidate_limit_override);
+    }
+
+    /** What the plan itself allows, ignoring any override. An unknown plan gets the trial's (smallest) limits. */
     public function planSeatLimit(): ?int
     {
-        return match ($this->plan) {
-            'free' => 1,
-            'starter' => 3,
-            'team' => 15,
-            'scale' => null,
-            default => 1,
-        };
+        return self::catalogEntry($this->plan)['users'];
     }
 
     public function planJobLimit(): ?int
     {
-        return $this->plan === 'free' ? 1 : null;
+        return self::catalogEntry($this->plan)['jobs'];
+    }
+
+    public function planCandidateLimit(): ?int
+    {
+        return self::catalogEntry($this->plan)['candidates'];
+    }
+
+    protected static function catalogEntry(?string $plan): array
+    {
+        foreach (self::PLAN_CATALOG as $entry) {
+            if ($entry['key'] === $plan) {
+                return $entry;
+            }
+        }
+
+        return self::PLAN_CATALOG[0];
     }
 }

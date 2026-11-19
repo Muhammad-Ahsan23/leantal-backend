@@ -3,6 +3,7 @@
 namespace App\Http\Controllers\Api;
 
 use App\Http\Controllers\Controller;
+use App\Http\Requests\Emails\ComposeEmailRequest;
 use App\Http\Requests\Emails\SendEmailRequest;
 use App\Models\Candidate;
 use App\Models\Company;
@@ -55,6 +56,46 @@ class EmailController extends Controller
         $this->emails->markThreadRead($candidateId, $user, $connection);
 
         return response()->json(['emails' => $emails]);
+    }
+
+    /**
+     * Compose: an email to any address(es) (not only a candidate), with optional attachments, sent from the user's own
+     * connected mailbox. Any signed-in user can use it; it is strictly personal like the rest of their mail.
+     */
+    public function compose(ComposeEmailRequest $request)
+    {
+        $user = $request->user();
+        $connection = $user->getConnectionName();
+        $data = $request->validated();
+        $files = $request->file('attachments') ?? [];
+
+        $total = array_sum(array_map(fn ($f) => $f->getSize(), $files));
+        if ($total > ComposeEmailRequest::MAX_KB * 1024) {
+            return response()->json(['message' => 'The files together must be 3 MB or smaller.', 'errors' => ['attachments' => ['The files together must be 3 MB or smaller.']]], 422);
+        }
+
+        try {
+            $email = $this->emails->composeEmail($user, $data['to'], $data['subject'], $data['body'], $files, $connection);
+        } catch (\RuntimeException $e) {
+            // Same rule as store(): the failure is visible to Super Admin, and the user never sees transport details.
+            // The body is deliberately NOT logged: this is free-form personal mail, unlike a template send.
+            $this->systemEvents->log('email', $e->getMessage(), $user->company_id, str_replace('pgsql_', '', $connection), [
+                'mode' => 'compose',
+                'recipient_count' => count($data['to']),
+                'attachment_count' => count($files),
+                'user_id' => $user->id,
+            ]);
+
+            $message = $e instanceof \Symfony\Component\Mailer\Exception\TransportExceptionInterface
+                ? "We couldn't send the email right now. Please try again in a few minutes."
+                : $e->getMessage();
+
+            return response()->json(['message' => str_starts_with($message, 'Gmail send failed') || str_starts_with($message, 'Microsoft Graph mail send failed')
+                ? "We couldn't send the email right now. Please try again in a few minutes."
+                : $message], 422);
+        }
+
+        return response()->json(['email' => $email], 201);
     }
 
     /**

@@ -213,6 +213,9 @@ Route::middleware('auth:sanctum')->group(function () {
     Route::get('/emails', [InboxController::class, 'index']);
     Route::get('/emails/unread-count', [InboxController::class, 'unreadCount']);
     Route::post('/emails/mark-all-read', [InboxController::class, 'markAllRead']);
+    // Compose: an email to any address, with attachments, from the user's own mailbox.
+    Route::post('/emails/compose', [EmailController::class, 'compose'])->middleware('throttle:20,1');
+    Route::get('/emails/{id}', [InboxController::class, 'show'])->whereUuid('id');
 
     Route::get('/company', [CompanyController::class, 'show']);
     Route::patch('/company', [CompanyController::class, 'update']);

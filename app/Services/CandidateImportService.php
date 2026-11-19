@@ -2,6 +2,7 @@
 
 namespace App\Services;
 
+use App\Exceptions\CandidateLimitReachedException;
 use App\Models\Job;
 use App\Models\User;
 use Illuminate\Http\UploadedFile;
@@ -153,7 +154,15 @@ class CandidateImportService
         $skipped = 0;
         $errors = [];
 
+        $limitMessage = null; // once the plan's candidate limit is hit, the rest of the file is reported, not retried row by row
+
         foreach ($validRows as $row) {
+            if ($limitMessage !== null) {
+                $skipped++;
+                $errors[] = ['email' => $row['email'], 'reason' => $limitMessage];
+                continue;
+            }
+
             $data = [
                 'name' => trim(($row['first_name'] ?? '').' '.($row['last_name'] ?? '')),
                 'email' => $row['email'],
@@ -173,6 +182,10 @@ class CandidateImportService
                     $this->candidates->createWithoutJob($data, $actor, $connection);
                 }
                 $created++;
+            } catch (CandidateLimitReachedException $e) {
+                $limitMessage = $e->getMessage();
+                $skipped++;
+                $errors[] = ['email' => $row['email'], 'reason' => $limitMessage];
             } catch (\RuntimeException $e) {
                 // With a job: "already has an active application for this job" (PRD Section 135).
                 // Without one: "A candidate with this email already exists." (Sections 43/133).

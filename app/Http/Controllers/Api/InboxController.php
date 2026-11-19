@@ -49,6 +49,7 @@ class InboxController extends Controller
             $query->where(function ($q) use ($like) {
                 $q->where('subject', 'ilike', $like)
                     ->orWhere('body', 'ilike', $like)
+                    ->orWhereRaw('to_emails::text ilike ?', [$like])
                     ->orWhereHas('candidate', fn ($c) => $c->where('name', 'ilike', $like)->orWhere('email', 'ilike', $like));
             });
         }
@@ -64,6 +65,9 @@ class InboxController extends Controller
             // conversation view loads them per candidate.
             'snippet' => $this->snippet($e->body),
             'sent_at' => $e->sent_at,
+            // Who a composed email went to (null for mail in a candidate's thread) and how many files it carried.
+            'to' => collect($e->to_emails ?? [])->pluck('email')->values(),
+            'attachment_count' => count($e->attachments ?? []),
             'is_read' => $e->direction === 'outbound' || $e->read_at !== null,
             'candidate' => $e->candidate
                 ? ['id' => $e->candidate->id, 'name' => $e->candidate->name, 'email' => $e->candidate->email]
@@ -79,6 +83,33 @@ class InboxController extends Controller
                 'last_page' => $page->lastPage(),
             ],
         ]);
+    }
+
+    /** One of the user's OWN emails in full (for a composed email that has no candidate conversation to open). */
+    public function show(Request $request, string $id)
+    {
+        $user = $request->user();
+        $connection = $user->getConnectionName();
+
+        $email = $this->ownEmails($user, $connection)->with('candidate:id,name,email')->find($id);
+        if (!$email) {
+            return response()->json(['message' => 'Email not found.'], 404);
+        }
+
+        $parts = EmailText::split($email->body);
+
+        return response()->json(['email' => [
+            'id' => $email->id,
+            'direction' => $email->direction,
+            'provider' => $email->provider,
+            'subject' => $email->subject,
+            'body_text' => $parts['text'],
+            'quoted_text' => $parts['quoted'],
+            'sent_at' => $email->sent_at,
+            'to' => collect($email->to_emails ?? [])->pluck('email')->values(),
+            'attachments' => $email->attachments ?? [],
+            'candidate' => $email->candidate ? ['id' => $email->candidate->id, 'name' => $email->candidate->name, 'email' => $email->candidate->email] : null,
+        ]]);
     }
 
     /** PRD Section 17 — Home "Unread Messages". */
