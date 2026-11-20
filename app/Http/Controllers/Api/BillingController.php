@@ -89,7 +89,9 @@ class BillingController extends Controller
             }
 
             // FrontendUrl refuses to build a link when FRONTEND_URL is missing (RuntimeException -> 502 below) instead of sending Creem a relative URL.
-            $successUrl = FrontendUrl::to('/settings/billing', ['checkout' => 'success']);
+            // The web app has one /settings route and picks the tab from ?tab=; a /settings/billing path matches no
+            // route, so the Owner was bounced to the dashboard and the "Payment received" notice never showed.
+            $successUrl = FrontendUrl::to('/settings', ['tab' => 'billing', 'checkout' => 'success']);
             $checkoutUrl = $this->creem->createCheckout($company, $data['plan'], $data['interval'], $successUrl);
 
             return response()->json(['checkout_url' => $checkoutUrl]);
