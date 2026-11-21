@@ -66,7 +66,11 @@ class SignupController extends Controller
         //    REGIONAL CONNECTION — this is what makes data residency work:
         //    the company row, and every row ever related to it, lives in
         //    exactly one region's database.
-        [$company, $owner] = DB::connection($connection)->transaction(function () use ($data, $region, $slug, $connection, $ownerEmail) {
+        // The trial runs on the plan the visitor picked (its full limits), for config('billing.trial_days') days.
+        $plan = $data['plan'] ?? Company::signupPlanKeys()[0];
+        $trialDays = (int) config('billing.trial_days', 14);
+
+        [$company, $owner] = DB::connection($connection)->transaction(function () use ($data, $region, $slug, $connection, $ownerEmail, $plan, $trialDays) {
 
             $company = Company::on($connection)->create([
                 'name' => $data['company_name'],
@@ -75,10 +79,10 @@ class SignupController extends Controller
                 'country_code' => strtoupper($data['country_code']),
                 'region' => $region,
                 'slug' => $slug,
-                'plan' => 'free',
+                'plan' => $plan,
                 'subscription_status' => 'trialing',
                 'trial_start' => now(),
-                'trial_end' => now()->addHours(72), // Section 9 — 72-hour free trial
+                'trial_end' => now()->addDays($trialDays), // free trial on the chosen plan (billing.trial_days)
             ]);
 
             $owner = User::on($connection)->create([
@@ -136,12 +140,13 @@ class SignupController extends Controller
         // verification email once the mail/queue infrastructure is wired up.
 
         return response()->json([
-            'message' => 'Company created. Your 72-hour trial has started.',
+            'message' => "Company created. Your {$trialDays}-day trial has started.",
             'company' => [
                 'id' => $company->id,
                 'name' => $company->name,
                 'slug' => $company->slug,
                 'region' => $company->region,
+                'plan' => $company->plan,
                 'trial_end' => $company->trial_end,
             ],
             'owner' => [

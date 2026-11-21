@@ -2,6 +2,7 @@
 
 namespace App\Http\Requests\Auth;
 
+use App\Models\Company;
 use App\Support\Countries;
 use Illuminate\Foundation\Http\FormRequest;
 use Illuminate\Validation\Rule;
@@ -54,6 +55,9 @@ class SignupRequest extends FormRequest
             // Must be a real ISO country: it decides the data region (PRD Section 73), so a made-up code
             // must not silently fall through to the US database.
             'country_code' => ['required', 'string', 'size:2', Rule::in(Countries::codes())],
+            // The plan the visitor picked. The free trial runs on it. Optional so a page that was opened before
+            // this field existed still signs up (it gets the first sold plan); an unknown value is refused.
+            'plan' => ['nullable', 'string', Rule::in(Company::signupPlanKeys())],
             'captcha_token' => ['required', 'string'],
             // The "I agree to the Terms and Privacy Policy" checkbox: must be ticked (true / 1 / "on" / "yes").
             'terms_accepted' => ['accepted'],

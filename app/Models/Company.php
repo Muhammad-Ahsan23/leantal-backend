@@ -101,7 +101,8 @@ class Company extends Model
      * monthly = price per month billed monthly, yearly = price per month billed yearly.
      * Every SOLD plan has a hard limit on users, active jobs and candidates (no plan is unlimited: that was the abuse
      * risk). A Super Admin can still raise any of them for one company (the *_limit_override columns).
-     * 'free' is the 72-hour trial only: it is not sold, so 'public' => false keeps it off the pricing page.
+     * 'free' is a leftover internal plan, not sold ('public' => false keeps it off the pricing page and the sign-up page).
+     * New companies start their free trial ON the plan they pick at sign-up, so they get that plan's full limits.
      * Plan KEYS are unchanged on purpose: they are in the Creem product ids, the webhook metadata and the database.
      */
     public const PLAN_CATALOG = [
@@ -112,6 +113,18 @@ class Company extends Model
     ];
 
     public const PLANS = ['free', 'starter', 'team', 'scale'];
+
+    /** The plans a visitor can pick at sign-up (and see on the pricing page): every catalog plan that is sold. */
+    public static function signupPlans(): array
+    {
+        return array_values(array_filter(self::PLAN_CATALOG, fn (array $plan) => ($plan['public'] ?? true) !== false));
+    }
+
+    /** The keys of signupPlans(): the only values the sign-up form may send. */
+    public static function signupPlanKeys(): array
+    {
+        return array_column(self::signupPlans(), 'key');
+    }
 
     /**
      * PRD Section 90 — Plan Seat Enforcement.

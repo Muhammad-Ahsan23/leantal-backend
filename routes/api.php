@@ -60,8 +60,10 @@ use App\Http\Controllers\Api\TaskAttachmentController;
 use App\Http\Controllers\Api\UserController;
 use Illuminate\Support\Facades\Route;
 use App\Http\Controllers\Api\BulkEmailController;
+use App\Http\Controllers\Api\Public\PublicPlansController;
 
 Route::post('/signup', [SignupController::class, 'store']);
+Route::get('/public/plans', PublicPlansController::class)->middleware('throttle:60,1');
 
 Route::post('/login', [LoginController::class, 'login']);
 Route::post('/login/verify-otp', [LoginController::class, 'verifyOtp'])->middleware('throttle:10,1');

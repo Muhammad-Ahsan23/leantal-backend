@@ -8,7 +8,7 @@ Artisan::command('inspire', function () {
     $this->comment(Inspiring::quote());
 })->purpose('Display an inspiring quote');
 
-// PRD Section 10 — 72-hour trial expiry, moves companies to read_only.
+// PRD Section 10 — trial expiry (billing.trial_days, 14 by default): moves companies to read_only.
 Schedule::command('trial:enforce')->hourly();
 
 // PRD Section 57 — Gmail watch registrations expire after 7 days;
