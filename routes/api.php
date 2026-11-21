@@ -165,6 +165,7 @@ Route::middleware('auth:sanctum')->group(function () {
     Route::get('/candidates/{id}/notes', [CandidateController::class, 'listNotes']);
     Route::post('/candidates/{id}/notes', [CandidateController::class, 'addNote']);
     Route::get('/candidates/{id}/resume-url', [CandidateController::class, 'resumeUrl']);
+    Route::get('/candidates/{id}/resume-file', [CandidateController::class, 'resumeFile']);
     Route::get('/candidates/{id}/activity', [CandidateController::class, 'activity']);
 
     Route::get('/jobs/{jobId}/applications', [ApplicationController::class, 'index']);

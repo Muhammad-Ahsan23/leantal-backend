@@ -537,6 +537,54 @@ class CandidateController extends Controller
         return response()->json(['url' => $url, 'filename' => $candidate->resume_original_name]);
     }
 
+    /**
+     * The PDF itself (not a storage link), for the in-page resume preview. The browser asks for it
+     * through the API, so the usual candidate permissions apply and no storage CORS setup is needed.
+     */
+    public function resumeFile(Request $request, string $id)
+    {
+        $user = $request->user();
+        $connection = $user->getConnectionName();
+        $candidate = Candidate::on($connection)->find($id);
+
+        if (!$candidate) {
+            return response()->json(['message' => 'Candidate not found.'], 404);
+        }
+
+        if (!$user->can('view', $candidate)) {
+            return response()->json(['message' => 'You do not have permission to view this candidate.'], 403);
+        }
+
+        if (!$candidate->resume_path) {
+            return response()->json(['message' => 'This candidate has no resume on file.'], 404);
+        }
+
+        if (strtolower(pathinfo((string) $candidate->resume_original_name, PATHINFO_EXTENSION)) !== 'pdf') {
+            return response()->json(['message' => 'Preview is available for PDF resumes only.'], 422);
+        }
+
+        try {
+            $stream = \Illuminate\Support\Facades\Storage::disk($candidate->resume_disk)->readStream($candidate->resume_path);
+        } catch (\Throwable $e) {
+            \Illuminate\Support\Facades\Log::warning('Resume preview read failed', ['candidate_id' => $candidate->id, 'error' => $e->getMessage()]);
+            $stream = null;
+        }
+
+        if (!is_resource($stream)) {
+            return response()->json(['message' => 'The resume file could not be found. Please upload it again.'], 404);
+        }
+
+        return response()->stream(function () use ($stream) {
+            fpassthru($stream);
+            fclose($stream);
+        }, 200, [
+            'Content-Type' => 'application/pdf',
+            'Content-Disposition' => 'inline',
+            'Cache-Control' => 'private, no-store',
+            'X-Content-Type-Options' => 'nosniff',
+        ]);
+    }
+
     public function addNote(CreateNoteRequest $request, string $id)
     {
         $user = $request->user();
