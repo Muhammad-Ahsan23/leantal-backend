@@ -52,10 +52,18 @@ class EnsureCompanyIsNotReadOnly
         $connection = $user->getConnectionName();
         $company = Company::on($connection)->find($user->company_id);
 
-        if ($company && $company->subscription_status === 'read_only') {
-            return response()->json([
-                'message' => 'Your trial has ended. Subscribe to continue using LeanTal.',
-            ], 403);
+        if ($company) {
+            // 'cancelled' = Creem ended the subscription; a trial past its end date is locked even if the hourly
+            // trial:enforce has not flipped the status yet (no free hour after day 14).
+            $trialOver = $company->subscription_status === 'trialing' && $company->trial_end && $company->trial_end->isPast();
+
+            if (in_array($company->subscription_status, ['read_only', 'cancelled'], true) || $trialOver) {
+                return response()->json([
+                    'message' => $company->subscription_status === 'cancelled'
+                        ? 'Your subscription has ended. Subscribe to continue using LeanTal.'
+                        : 'Your trial has ended. Subscribe to continue using LeanTal.',
+                ], 403);
+            }
         }
 
         return $next($request);

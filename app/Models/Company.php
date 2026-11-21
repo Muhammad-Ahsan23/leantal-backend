@@ -121,6 +121,42 @@ class Company extends Model
     }
 
     /** The keys of signupPlans(): the only values the sign-up form may send. */
+    /** "https://www.Acme.com/careers?x=1" -> "acme.com": the key a website is compared by. */
+    public static function domainOf(?string $website): string
+    {
+        $domain = strtolower(trim((string) $website));
+        $domain = preg_replace('#^[a-z][a-z0-9+.-]*://#', '', $domain);
+        $domain = preg_replace('#^www\.#', '', $domain);
+        $domain = preg_replace('#[/?\#].*$#', '', $domain); // drop path, query and fragment
+        $domain = preg_replace('#:\d+$#', '', $domain);     // drop a port
+
+        return rtrim($domain, '.');
+    }
+
+    /**
+     * True when a company (in ANY region) already signed up with this website's domain - one free trial per
+     * company website. Compared on the normalised domain, so www./https/paths do not get around it.
+     */
+    public static function websiteDomainTaken(string $website): bool
+    {
+        $domain = self::domainOf($website);
+        if ($domain === '') {
+            return false;
+        }
+
+        $like = '%'.str_replace(['\\', '%', '_'], ['\\\\', '\\%', '\\_'], $domain).'%';
+
+        foreach (['pgsql_us', 'pgsql_eu', 'pgsql_uk'] as $connection) {
+            foreach (static::on($connection)->where('website', 'ilike', $like)->pluck('website') as $existing) {
+                if (self::domainOf($existing) === $domain) {
+                    return true;
+                }
+            }
+        }
+
+        return false;
+    }
+
     public static function signupPlanKeys(): array
     {
         return array_column(self::signupPlans(), 'key');

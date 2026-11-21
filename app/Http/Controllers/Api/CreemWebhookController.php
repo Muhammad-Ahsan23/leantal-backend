@@ -125,7 +125,7 @@ class CreemWebhookController extends Controller
         } elseif ($eventType === self::EVENT_UPDATED) {
             $this->syncPlanFromProduct($companyId, $object);
         } elseif ($eventType === self::EVENT_CANCELED) {
-            $this->updateCompany($companyId, ['subscription_status' => 'cancelled']);
+            $this->endSubscription($companyId, $object, 'cancelled');
         } elseif ($eventType === self::EVENT_PAST_DUE) {
             // Only an ACTIVE (or already past-due) subscription can slip into past_due. A late or
             // out-of-order event must never undo a cancellation or reopen a read_only company.
@@ -143,7 +143,7 @@ class CreemWebhookController extends Controller
             ]);
         } elseif ($eventType === self::EVENT_EXPIRED) {
             // PRD Section 129 — never delete data, just lock access.
-            $this->updateCompany($companyId, ['subscription_status' => 'read_only']);
+            $this->endSubscription($companyId, $object, 'read_only');
         } elseif (in_array($eventType, self::EVENTS_LOGGED_ONLY, true)) {
             Log::info('Creem webhook: event logged, no state change wired yet', [
                 'event_id' => $eventId, 'event_type' => $eventType, 'company_id' => $companyId,
@@ -286,6 +286,30 @@ class CreemWebhookController extends Controller
         }
 
         $company->update($changes($company));
+    }
+
+    /**
+     * subscription.canceled / subscription.expired: lock the company - but only when the event is about the
+     * subscription the company is on NOW. A late event for an OLD subscription (the customer cancelled, then
+     * subscribed again) must not lock a company that is paying today.
+     */
+    protected function endSubscription(string $companyId, array $object, string $status): void
+    {
+        $eventSubscriptionId = ($object['object'] ?? null) === 'subscription'
+            ? ($object['id'] ?? null)
+            : ($object['subscription']['id'] ?? null);
+
+        $region = $this->routing->findRegionByCompanyId($companyId);
+        $company = $region ? Company::on(RegionResolver::connectionFor($region))->find($companyId) : null;
+
+        if ($company && $eventSubscriptionId && $company->creem_subscription_id && $company->creem_subscription_id !== $eventSubscriptionId) {
+            Log::info('Creem webhook: end-of-subscription event ignored, it is for an older subscription', [
+                'company_id' => $companyId, 'event_subscription' => $eventSubscriptionId, 'current' => $company->creem_subscription_id,
+            ]);
+            return;
+        }
+
+        $this->updateCompany($companyId, ['subscription_status' => $status]);
     }
 
     protected function updateCompany(string $companyId, array $data): void

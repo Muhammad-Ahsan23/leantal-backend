@@ -90,6 +90,12 @@ class SignupRequest extends FormRequest
                     'company_email',
                     'Your email domain must match your company website domain.'
                 );
+            } elseif (Company::websiteDomainTaken($website)) {
+                // One free trial per company website. Colleagues join through the Owner's invitation instead.
+                $validator->errors()->add(
+                    'company_website',
+                    'A LeanTal workspace already exists for this website. Ask your account owner to invite you.'
+                );
             }
         });
     }

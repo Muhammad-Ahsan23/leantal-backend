@@ -11,6 +11,9 @@ Artisan::command('inspire', function () {
 // PRD Section 10 — trial expiry (billing.trial_days, 14 by default): moves companies to read_only.
 Schedule::command('trial:enforce')->hourly();
 
+// Reminder emails to the Owner: trial ends in 3 days, and again the day before. Once per company and reminder.
+Schedule::command('trial:remind')->dailyAt('09:00');
+
 // PRD Section 57 — Gmail watch registrations expire after 7 days;
 // renew any expiring within 24 hours so reply-sync never silently stops.
 Schedule::command('gmail:renew-watches')->daily();
