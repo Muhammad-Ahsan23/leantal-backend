@@ -486,15 +486,50 @@ class UserController extends Controller
     }
 
     /**
+     * The removed person leaves every job / candidate / open task they were on. With $toId the new person takes their
+     * place; without it the item keeps its other assignees (the next one becomes primary) or ends up Unassigned.
+     */
+    protected function moveAssignments(string $connection, string $companyId, string $fromId, ?string $toId): void
+    {
+        $kinds = [
+            [Job::class, 'jobs', 'job_assignees', 'job_id', null],
+            [Candidate::class, 'candidates', 'candidate_assignees', 'candidate_id', null],
+            [Task::class, 'tasks', 'task_assignees', 'task_id', ['to_do', 'in_progress']], // finished / cancelled tasks are history
+        ];
+
+        foreach ($kinds as [$model, $table, $pivot, $key, $statuses]) {
+            $query = $model::on($connection)->where("{$table}.company_id", $companyId)->assignedTo($fromId);
+            if ($statuses) {
+                $query->whereIn("{$table}.status", $statuses);
+            }
+
+            foreach (array_chunk($query->pluck("{$table}.id")->all(), 500) as $chunk) {
+                DB::connection($connection)->table($pivot)->whereIn($key, $chunk)->where('user_id', $fromId)->delete();
+
+                if ($toId) {
+                    DB::connection($connection)->table($pivot)->insertOrIgnore(
+                        array_map(fn ($id) => [$key => $id, 'user_id' => $toId, 'created_at' => now()], $chunk)
+                    );
+                    $model::on($connection)->whereIn('id', $chunk)->where('assigned_user_id', $fromId)->update(['assigned_user_id' => $toId]);
+                } else {
+                    $model::on($connection)->whereIn('id', $chunk)->where('assigned_user_id', $fromId)->update([
+                        'assigned_user_id' => DB::raw("(select user_id from {$pivot} where {$pivot}.{$key} = {$table}.id order by created_at limit 1)"),
+                    ]);
+                }
+            }
+        }
+    }
+
+    /**
      * Open work only: jobs and candidates assigned to the user, and tasks that are still to do / in
      * progress. Finished and cancelled tasks are history and stay attached to the user.
      */
     protected function workloadFor(string $connection, string $companyId, string $userId): array
     {
         return [
-            'jobs' => Job::on($connection)->where('company_id', $companyId)->where('assigned_user_id', $userId)->count(),
-            'candidates' => Candidate::on($connection)->where('company_id', $companyId)->where('assigned_user_id', $userId)->count(),
-            'tasks' => Task::on($connection)->where('company_id', $companyId)->where('assigned_user_id', $userId)
+            'jobs' => Job::on($connection)->where('company_id', $companyId)->assignedTo($userId)->count(),
+            'candidates' => Candidate::on($connection)->where('company_id', $companyId)->assignedTo($userId)->count(),
+            'tasks' => Task::on($connection)->where('company_id', $companyId)->assignedTo($userId)
                 ->whereIn('status', ['to_do', 'in_progress'])->count(),
         ];
     }
@@ -539,13 +574,7 @@ class UserController extends Controller
         DB::connection($connection)->transaction(function () use ($connection, $actor, $target, $newId) {
             $target->forceFill(['status' => 'removed', 'removed_at' => now()])->save();
 
-            Job::on($connection)->where('company_id', $actor->company_id)->where('assigned_user_id', $target->id)
-                ->update(['assigned_user_id' => $newId]);
-            Candidate::on($connection)->where('company_id', $actor->company_id)->where('assigned_user_id', $target->id)
-                ->update(['assigned_user_id' => $newId]);
-            Task::on($connection)->where('company_id', $actor->company_id)->where('assigned_user_id', $target->id)
-                ->whereIn('status', ['to_do', 'in_progress'])
-                ->update(['assigned_user_id' => $newId]);
+            $this->moveAssignments($connection, $actor->company_id, $target->id, $newId);
         });
 
         $target->tokens()->delete();

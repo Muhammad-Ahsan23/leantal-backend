@@ -10,6 +10,7 @@ use App\Models\Job;
 use App\Models\PipelineStage;
 use App\Models\Task;
 use App\Models\User;
+use App\Support\Assignees;
 use App\Support\CacheVersion;
 use App\Services\NotificationService;
 use Illuminate\Support\Facades\DB;
@@ -52,7 +53,12 @@ class JobService
             $data['application_fields'] = Job::normalizeApplicationFields($data['application_fields']);
         }
 
-        $job = DB::connection($connection)->transaction(function () use ($data, $creator, $connection) {
+        // One person (assigned_user_id) or several (assigned_user_ids); the first one is the job's primary owner.
+        $assigneeIds = Assignees::idsFrom($data);
+        unset($data['assigned_user_ids']);
+        $data['assigned_user_id'] = $assigneeIds[0] ?? null;
+
+        $job = DB::connection($connection)->transaction(function () use ($data, $creator, $connection, $assigneeIds) {
             $job = Job::on($connection)->create([
                 ...$data,
                 'company_id' => $creator->company_id,
@@ -68,6 +74,10 @@ class JobService
                     'order' => $i + 1,
                     'protected' => true,
                 ]);
+            }
+
+            if (count($assigneeIds) > 1) {
+                $job->setAssignees($assigneeIds); // the first one is already stored; this adds the others
             }
 
             return $job;
@@ -169,29 +179,47 @@ class JobService
      * has one assigned_user_id per candidate, not per-application. Rare
      * in practice; flag for the client if it becomes a real issue.
      */
-    public function assign(Job $job, string $assignedUserId, string $connection): Job
+    public function assign(Job $job, array|string $assigneeIds, string $connection): Job
     {
-        DB::connection($connection)->transaction(function () use ($job, $assignedUserId, $connection) {
-            $job->update(['assigned_user_id' => $assignedUserId]);
+        $assigneeIds = array_values((array) $assigneeIds); // one id (as before) or a list
+        $added = [];
 
-            $candidateIds = Application::on($connection)
-                ->where('job_id', $job->id)
-                ->pluck('candidate_id')
-                ->unique();
+        DB::connection($connection)->transaction(function () use ($job, $assigneeIds, $connection, &$added) {
+            $added = $job->setAssignees($assigneeIds);
 
-            Candidate::on($connection)
-                ->whereIn('id', $candidateIds)
-                ->update(['assigned_user_id' => $assignedUserId]);
+            // Same cascade as before, now with the whole list: every candidate with ANY application to this job gets the
+            // job's assignees (replacing whoever they had), so the new owners see all prior activity.
+            $candidateIds = Candidate::on($connection)
+                ->whereIn('id', Application::on($connection)->where('job_id', $job->id)->select('candidate_id'))
+                ->pluck('id')
+                ->all();
+
+            foreach (array_chunk($candidateIds, 500) as $chunk) {
+                DB::connection($connection)->table('candidate_assignees')->whereIn('candidate_id', $chunk)->delete();
+
+                $rows = [];
+                foreach ($chunk as $candidateId) {
+                    foreach ($assigneeIds as $userId) {
+                        $rows[] = ['candidate_id' => $candidateId, 'user_id' => $userId, 'created_at' => now()];
+                    }
+                }
+                foreach (array_chunk($rows, 1000) as $batch) {
+                    DB::connection($connection)->table('candidate_assignees')->insert($batch);
+                }
+
+                Candidate::on($connection)->whereIn('id', $chunk)->update(['assigned_user_id' => $assigneeIds[0] ?? null]);
+            }
         });
 
         $this->forgetJobsCache($job->company_id);
         CacheVersion::bump("company:{$job->company_id}:candidates");
 
-        // PRD Section 20 — "Job assigned to you" is an explicitly
-        // listed notification trigger.
-        $assignedUser = \App\Models\User::on($connection)->find($assignedUserId);
-        if ($assignedUser) {
-            $this->notifications->notify($assignedUser, 'job_assigned', "You were assigned to job: {$job->title}", $connection, "/jobs/{$job->id}");
+        // PRD Section 20 — "Job assigned to you" is an explicitly listed notification trigger. Only people who were
+        // not on the job before are told.
+        if ($added) {
+            foreach (\App\Models\User::on($connection)->whereIn('id', $added)->get() as $assignedUser) {
+                $this->notifications->notify($assignedUser, 'job_assigned', "You were assigned to job: {$job->title}", $connection, "/jobs/{$job->id}");
+            }
         }
 
         return $job->fresh();

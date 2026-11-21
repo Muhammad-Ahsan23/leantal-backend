@@ -79,13 +79,13 @@ class CandidatePolicy
      */
     protected function recruiterHasAccess(User $user, Candidate $candidate): bool
     {
-        if ($candidate->assigned_user_id === $user->id) {
+        if ($candidate->isAssignedTo($user->id)) {
             return true;
         }
 
         return Application::on($candidate->getConnectionName())
             ->where('candidate_id', $candidate->id)
-            ->whereHas('job', fn ($j) => $j->where('assigned_user_id', $user->id))
+            ->whereHas('job', fn ($j) => $j->assignedTo($user->id))
             ->exists();
     }
 }

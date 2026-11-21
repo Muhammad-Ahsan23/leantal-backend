@@ -17,6 +17,8 @@ class UpdateTaskRequest extends FormRequest
         return [
             'title' => ['sometimes', 'required', 'string', 'max:255'],
             'assigned_user_id' => ['sometimes', 'required', 'uuid'],
+            'assigned_user_ids' => ['sometimes', 'array', 'min:1'],
+            'assigned_user_ids.*' => ['uuid', 'distinct'],
             'due_date' => ['sometimes', 'nullable', 'date'],
             'notes' => ['sometimes', 'nullable', 'string', 'max:2000'],
         ];

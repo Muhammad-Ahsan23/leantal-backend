@@ -34,7 +34,7 @@ class TaskPolicy
             return true;
         }
 
-        return $task->assigned_user_id === $user->id;
+        return $task->isAssignedTo($user->id);
     }
 
     public function create(User $user): bool
@@ -57,7 +57,7 @@ class TaskPolicy
             return true;
         }
 
-        return $task->assigned_user_id === $user->id;
+        return $task->isAssignedTo($user->id);
     }
 
     public function delete(User $user, Task $task): bool

@@ -2,6 +2,7 @@
 
 namespace App\Models;
 
+use App\Models\Concerns\HasAssignees;
 use App\Support\Roles;
 use Illuminate\Database\Eloquent\Builder;
 use Illuminate\Database\Eloquent\Concerns\HasUuids;
@@ -11,7 +12,7 @@ use Illuminate\Database\Eloquent\SoftDeletes;
 
 class Candidate extends Model
 {
-    use HasFactory, HasUuids, SoftDeletes;
+    use HasFactory, HasUuids, SoftDeletes, HasAssignees;
 
     protected $fillable = [
         'company_id', 'name', 'email', 'normalized_email', 'phone',
@@ -35,6 +36,16 @@ class Candidate extends Model
         return $this->belongsTo(User::class, 'assigned_user_id');
     }
 
+    public function assigneePivotTable(): string
+    {
+        return 'candidate_assignees';
+    }
+
+    public function assigneePivotKey(): string
+    {
+        return 'candidate_id';
+    }
+
     public function applications()
     {
         return $this->hasMany(Application::class);
@@ -55,9 +66,9 @@ class Candidate extends Model
 
         return $query->where('company_id', $user->company_id)
             ->where(function (Builder $q) use ($user) {
-                $q->where('assigned_user_id', $user->id)
+                $q->assignedTo($user->id)
                   ->orWhereHas('applications', function ($a) use ($user) {
-                      $a->whereHas('job', fn ($j) => $j->where('assigned_user_id', $user->id));
+                      $a->whereHas('job', fn ($j) => $j->assignedTo($user->id));
                   });
             });
     }

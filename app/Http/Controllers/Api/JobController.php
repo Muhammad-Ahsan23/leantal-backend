@@ -13,6 +13,7 @@ use App\Models\User;
 use App\Services\JobService;
 use App\Services\SocialSharingService;
 use App\Support\ActivityLogger;
+use App\Support\Assignees;
 use App\Support\CacheVersion;
 use Illuminate\Http\Request;
 use Illuminate\Support\Facades\Cache;
@@ -57,7 +58,7 @@ class JobController extends Controller
         $cacheKey = "jobs:v{$version}:".$user->id.':'.md5(json_encode([$filters, $paginate ? [$page, $perPage] : null]));
 
         $result = Cache::remember($cacheKey, 60, function () use ($user, $connection, $filters, $paginate, $page, $perPage) {
-            $query = Job::on($connection)->visibleTo($user)->with('assignedUser:id,name');
+            $query = Job::on($connection)->visibleTo($user)->with(['assignedUser:id,name', 'assignees:id,name']);
 
             if (!empty($filters['status'])) {
                 $query->where('status', $filters['status']);
@@ -66,7 +67,7 @@ class JobController extends Controller
                 $query->where('department', $filters['department']);
             }
             if (!empty($filters['assigned_user_id'])) {
-                $query->where('assigned_user_id', $filters['assigned_user_id']);
+                $query->assignedTo($filters['assigned_user_id']);
             }
             if (!empty($filters['search'])) {
                 $query->where('title', 'ilike', '%'.$filters['search'].'%');
@@ -117,6 +118,11 @@ class JobController extends Controller
 
         $connection = $user->getConnectionName();
 
+        $assigneeIds = Assignees::idsFrom($request->validated());
+        if ($assigneeIds && !Assignees::inCompany($connection, $user->company_id, $assigneeIds)) {
+            return response()->json(['message' => 'That user was not found in your company.'], 422);
+        }
+
         try {
             $job = $this->jobs->create($request->validated(), $user, $connection);
         } catch (\RuntimeException $e) {
@@ -128,14 +134,14 @@ class JobController extends Controller
             'job_title' => $job->title,
         ]);
 
-        return response()->json(['job' => $job->load('pipelineStages')], 201);
+        return response()->json(['job' => $job->load(['pipelineStages', 'assignedUser:id,name', 'assignees:id,name'])], 201);
     }
 
     public function show(Request $request, string $id)
     {
         $user = $request->user();
         $connection = $user->getConnectionName();
-        $job = Job::on($connection)->with(['pipelineStages', 'assignedUser:id,name', 'creator:id,name'])->find($id);
+        $job = Job::on($connection)->with(['pipelineStages', 'assignedUser:id,name', 'assignees:id,name', 'creator:id,name'])->find($id);
 
         if (!$job) {
             return response()->json(['message' => 'Job not found.'], 404);
@@ -252,23 +258,24 @@ class JobController extends Controller
             return response()->json(['message' => 'You do not have permission to assign this job.'], 403);
         }
 
-        $targetUserId = $request->validated()['assigned_user_id'];
-        $targetUser = User::on($connection)->where('company_id', $user->company_id)->find($targetUserId);
+        $assigneeIds = Assignees::idsFrom($request->validated());
+        $targetUsers = Assignees::inCompany($connection, $user->company_id, $assigneeIds);
 
-        if (!$targetUser) {
+        if (!$targetUsers) {
             return response()->json(['message' => 'That user was not found in your company.'], 422);
         }
 
-        $job = $this->jobs->assign($job, $targetUserId, $connection);
+        $job = $this->jobs->assign($job, $assigneeIds, $connection);
 
         // PRD Section 65 — "Sarah Johnson assigned Backend Engineer to Rahul"
         ActivityLogger::log($connection, $user->company_id, $user->id, 'job.assigned', 'job', $job->id, [
             'job_title' => $job->title,
-            'assigned_user_id' => $targetUserId,
-            'assigned_user_name' => User::on($connection)->where('id', $targetUserId)->value('name'),
+            'assigned_user_id' => $assigneeIds[0],
+            'assigned_user_name' => Assignees::names($targetUsers, $assigneeIds), // "Ali, Sara" when several
+            'assigned_user_ids' => $assigneeIds,
         ]);
 
-        return response()->json(['job' => $job]);
+        return response()->json(['job' => $job->load(['assignedUser:id,name', 'assignees:id,name'])]);
     }
 
     /**

@@ -22,7 +22,10 @@ class AssignJobRequest extends FormRequest
     public function rules(): array
     {
         return [
-            'assigned_user_id' => ['required', 'uuid'],
+            // One person (assigned_user_id, as before) or several (assigned_user_ids).
+            'assigned_user_id' => ['required_without:assigned_user_ids', 'uuid'],
+            'assigned_user_ids' => ['required_without:assigned_user_id', 'array', 'min:1'],
+            'assigned_user_ids.*' => ['uuid', 'distinct'],
         ];
     }
 }

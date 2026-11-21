@@ -42,7 +42,7 @@ class ApplicationController extends Controller
             return response()->json(['message' => 'You do not have permission to view this job.'], 403);
         }
 
-        $withRelations = ['candidate:id,name,email,current_title,current_company,assigned_user_id', 'stage'];
+        $withRelations = ['candidate:id,name,email,current_title,current_company,assigned_user_id', 'candidate.assignees:id,name', 'stage'];
         $isManagement = in_array($user->role, Roles::MANAGEMENT, true);
 
         // Without any of these parameters the answer is the same as it always was: every application of the job.
@@ -52,7 +52,7 @@ class ApplicationController extends Controller
             $query = Application::on($connection)->where('job_id', $jobId)->with($withRelations);
 
             if (!$isManagement) {
-                $query->whereHas('candidate', fn ($q) => $q->where('assigned_user_id', $user->id));
+                $query->whereHas('candidate', fn ($q) => $q->assignedTo($user->id));
             }
 
             return response()->json(['applications' => $query->get()]);
@@ -81,7 +81,7 @@ class ApplicationController extends Controller
                 ->where('job_id', $jobId)
                 ->whereHas('candidate', function ($q) use ($isManagement, $user, $search, $like) {
                     if (!$isManagement) {
-                        $q->where('assigned_user_id', $user->id);
+                        $q->assignedTo($user->id);
                     }
                     if ($search !== '') {
                         $q->where(fn ($w) => $w->where('name', 'ilike', $like)->orWhere('email', 'ilike', $like));

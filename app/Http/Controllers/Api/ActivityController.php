@@ -105,8 +105,16 @@ class ActivityController extends Controller
     protected function scopeToRecruiter($query, $user, string $connection): void
     {
         $myCandidates = Candidate::on($connection)->visibleTo($user)->select('candidates.id'); // same rule as the Candidates page
-        $myJobs = DB::connection($connection)->table('jobs')->where('company_id', $user->company_id)->where('assigned_user_id', $user->id)->select('id');
-        $myTasks = DB::connection($connection)->table('tasks')->where('company_id', $user->company_id)->where('assigned_user_id', $user->id)->select('id');
+        // "Mine" = I am the primary assignee or one of the others.
+        $mine = fn (string $table, string $pivot, string $key) => DB::connection($connection)->table($table)
+            ->where("{$table}.company_id", $user->company_id)
+            ->where(function ($w) use ($table, $pivot, $key, $user) {
+                $w->where("{$table}.assigned_user_id", $user->id)
+                    ->orWhereExists(fn ($s) => $s->selectRaw('1')->from($pivot)->whereColumn("{$pivot}.{$key}", "{$table}.id")->where("{$pivot}.user_id", $user->id));
+            })
+            ->select("{$table}.id");
+        $myJobs = $mine('jobs', 'job_assignees', 'job_id');
+        $myTasks = $mine('tasks', 'task_assignees', 'task_id');
         $myApplications = DB::connection($connection)->table('applications')
             ->where('company_id', $user->company_id)
             ->where(function ($q) use ($myCandidates, $myJobs) {

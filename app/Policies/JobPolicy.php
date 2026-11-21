@@ -32,7 +32,7 @@ class JobPolicy
             return true;
         }
 
-        return $job->assigned_user_id === $user->id;
+        return $job->isAssignedTo($user->id);
     }
 
     public function create(User $user): bool

@@ -2,6 +2,7 @@
 
 namespace App\Models;
 
+use App\Models\Concerns\HasAssignees;
 use App\Support\Roles;
 use Illuminate\Database\Eloquent\Builder;
 use Illuminate\Database\Eloquent\Concerns\HasUuids;
@@ -10,7 +11,7 @@ use Illuminate\Database\Eloquent\Model;
 
 class Task extends Model
 {
-    use HasFactory, HasUuids;
+    use HasFactory, HasUuids, HasAssignees;
 
     protected $fillable = [
         'company_id', 'type', 'title', 'assigned_user_id', 'created_by',
@@ -30,6 +31,16 @@ class Task extends Model
     public function assignedUser()
     {
         return $this->belongsTo(User::class, 'assigned_user_id');
+    }
+
+    public function assigneePivotTable(): string
+    {
+        return 'task_assignees';
+    }
+
+    public function assigneePivotKey(): string
+    {
+        return 'task_id';
     }
 
     public function candidate()
@@ -58,6 +69,6 @@ class Task extends Model
         }
 
         return $query->where('company_id', $user->company_id)
-            ->where('assigned_user_id', $user->id);
+            ->assignedTo($user->id);
     }
 }

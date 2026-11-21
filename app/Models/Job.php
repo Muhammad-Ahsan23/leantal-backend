@@ -2,6 +2,7 @@
 
 namespace App\Models;
 
+use App\Models\Concerns\HasAssignees;
 use App\Support\Roles;
 use Illuminate\Database\Eloquent\Builder;
 use Illuminate\Database\Eloquent\Concerns\HasUuids;
@@ -10,7 +11,7 @@ use Illuminate\Database\Eloquent\Model;
 
 class Job extends Model
 {
-    use HasFactory, HasUuids;
+    use HasFactory, HasUuids, HasAssignees;
 
     protected $fillable = [
         'company_id', 'title', 'department', 'description', 'location',
@@ -85,6 +86,16 @@ class Job extends Model
         return $this->belongsTo(User::class, 'assigned_user_id');
     }
 
+    public function assigneePivotTable(): string
+    {
+        return 'job_assignees';
+    }
+
+    public function assigneePivotKey(): string
+    {
+        return 'job_id';
+    }
+
     public function creator()
     {
         return $this->belongsTo(User::class, 'created_by');
@@ -113,7 +124,7 @@ class Job extends Model
         }
 
         return $query->where('company_id', $user->company_id)
-            ->where('assigned_user_id', $user->id);
+            ->assignedTo($user->id);
     }
 
     /**

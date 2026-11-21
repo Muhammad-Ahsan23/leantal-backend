@@ -12,6 +12,7 @@ use App\Models\Task;
 use App\Models\User;
 use App\Services\TaskAttachmentService;
 use App\Services\TaskService;
+use App\Support\Assignees;
 use App\Support\Roles;
 use Illuminate\Http\Request;
 
@@ -56,7 +57,7 @@ class TaskController extends Controller
         $base = Task::on($connection)->visibleTo($user);
 
         if ($assignedTo) {
-            $base->where('assigned_user_id', $assignedTo);
+            $base->assignedTo($assignedTo);
         }
 
         if ($search !== '') {
@@ -64,13 +65,14 @@ class TaskController extends Controller
             $base->where(function ($q) use ($like) {
                 $q->where('title', 'ilike', $like)
                     ->orWhereHas('assignedUser', fn ($u) => $u->where('name', 'ilike', $like))
+                    ->orWhereHas('assignees', fn ($u) => $u->where('name', 'ilike', $like))
                     ->orWhereHas('candidate', fn ($c) => $c->where('name', 'ilike', $like))
                     ->orWhereHas('job', fn ($j) => $j->where('title', 'ilike', $like));
             });
         }
 
         $query = (clone $base)
-            ->with(['assignedUser:id,name', 'candidate:id,name', 'job:id,title'])
+            ->with(['assignedUser:id,name', 'assignees:id,name', 'candidate:id,name', 'job:id,title'])
             ->withCount('attachments')
             ->orderByDesc('created_at')
             ->orderBy('id');
@@ -123,7 +125,7 @@ class TaskController extends Controller
     {
         $user = $request->user();
         $connection = $user->getConnectionName();
-        $task = Task::on($connection)->with(['assignedUser:id,name', 'candidate:id,name', 'job:id,title', 'attachments.uploader:id,name'])->withCount('attachments')->find($id);
+        $task = Task::on($connection)->with(['assignedUser:id,name', 'assignees:id,name', 'candidate:id,name', 'job:id,title', 'attachments.uploader:id,name'])->withCount('attachments')->find($id);
 
         if (!$task) {
             return response()->json(['message' => 'Task not found.'], 404);
@@ -153,8 +155,7 @@ class TaskController extends Controller
         $connection = $user->getConnectionName();
         $data = $request->validated();
 
-        $assignedUser = User::on($connection)->where('company_id', $user->company_id)->find($data['assigned_user_id']);
-        if (!$assignedUser) {
+        if (!Assignees::inCompany($connection, $user->company_id, Assignees::idsFrom($data))) {
             return response()->json(['message' => 'That user was not found in your company.'], 422);
         }
 
@@ -174,7 +175,7 @@ class TaskController extends Controller
 
         $task = $this->tasks->create($data, $user, $user->company_id, $connection);
 
-        return response()->json(['task' => $task->load(['assignedUser:id,name', 'candidate:id,name', 'job:id,title'])], 201);
+        return response()->json(['task' => $task->load(['assignedUser:id,name', 'assignees:id,name', 'candidate:id,name', 'job:id,title'])], 201);
     }
 
     /**
@@ -197,16 +198,15 @@ class TaskController extends Controller
 
         $data = $request->validated();
 
-        if (isset($data['assigned_user_id'])) {
-            $assignee = User::on($connection)->where('company_id', $user->company_id)->find($data['assigned_user_id']);
-            if (!$assignee) {
+        if (array_key_exists('assigned_user_ids', $data) || array_key_exists('assigned_user_id', $data)) {
+            if (!Assignees::inCompany($connection, $user->company_id, Assignees::idsFrom($data))) {
                 return response()->json(['message' => 'That user was not found in your company.'], 422);
             }
         }
 
         $task = $this->tasks->update($task, $data, $user, $connection);
 
-        return response()->json(['task' => $task->load(['assignedUser:id,name', 'candidate:id,name', 'job:id,title'])]);
+        return response()->json(['task' => $task->load(['assignedUser:id,name', 'assignees:id,name', 'candidate:id,name', 'job:id,title'])]);
     }
 
     /**

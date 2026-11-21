@@ -3,9 +3,7 @@
 namespace App\Services;
 
 use App\Models\Application;
-use App\Exceptions\CandidateLimitReachedException;
 use App\Models\Candidate;
-use App\Models\Company;
 use App\Models\Job;
 use App\Models\Note;
 use App\Models\PipelineStage;
@@ -64,8 +62,6 @@ class CandidateService
 
         try {
             $candidate = DB::connection($connection)->transaction(function () use ($data, $actor, $connection, $normalizedEmail, $resumeMeta) {
-                $this->assertCandidateLimitNotReached($connection, $actor->company_id);
-
                 $candidate = Candidate::on($connection)->create([
                     'company_id' => $actor->company_id,
                     'name' => $data['name'],
@@ -98,28 +94,6 @@ class CandidateService
         return $candidate;
     }
 
-    /**
-     * Plan candidate limit. Call it right before a NEW candidate row is created, inside the transaction: the company
-     * row is locked first, so two adds at the same moment cannot both squeeze past the last free place.
-     * Archived candidates count (otherwise archiving would be a way round the limit); deleted ones do not.
-     *
-     * @throws CandidateLimitReachedException
-     */
-    public function assertCandidateLimitNotReached(string $connection, string $companyId): void
-    {
-        $company = Company::on($connection)->whereKey($companyId)->lockForUpdate()->first();
-        $limit = $company?->candidateLimit();
-        if ($limit === null) {
-            return;
-        }
-
-        if (Candidate::on($connection)->where('company_id', $companyId)->count() >= $limit) {
-            throw new CandidateLimitReachedException(
-                "You've reached your plan's candidate limit (".number_format($limit)."). Upgrade your plan or delete candidates you no longer need."
-            );
-        }
-    }
-
     public function addToJob(array $data, Job $job, User $actor, string $connection, ?UploadedFile $resume = null): array
     {
         $normalizedEmail = strtolower(trim($data['email']));
@@ -136,8 +110,6 @@ class CandidateService
                 ->first();
 
             if (!$candidate) {
-                $this->assertCandidateLimitNotReached($connection, $job->company_id);
-
                 $candidate = Candidate::on($connection)->create([
                     'company_id' => $job->company_id,
                     'name' => $data['name'],
@@ -365,20 +337,25 @@ class CandidateService
     /**
      * PRD Section 20 — "Candidate assigned to you" notification trigger.
      */
-    public function assign(Candidate $candidate, string $newAssignedUserId, User $actor, string $connection): Candidate
+    public function assign(Candidate $candidate, array|string $assigneeIds, User $actor, string $connection): Candidate
     {
-        $candidate->update(['assigned_user_id' => $newAssignedUserId]);
+        $assigneeIds = array_values((array) $assigneeIds); // one id (as before) or a list
+
+        $added = DB::connection($connection)->transaction(fn () => $candidate->setAssignees($assigneeIds));
 
         $this->logActivity($connection, $candidate->company_id, $actor->id, 'candidate.reassigned', 'candidate', $candidate->id, [
             'candidate_name' => $candidate->name,
-            'new_assigned_user_id' => $newAssignedUserId,
+            'new_assigned_user_id' => $assigneeIds[0] ?? null,
+            'new_assigned_user_ids' => $assigneeIds,
         ]);
 
         $this->forgetCandidatesCache($candidate->company_id);
 
-        $assignedUser = User::on($connection)->find($newAssignedUserId);
-        if ($assignedUser) {
-            $this->notifications->notify($assignedUser, 'candidate_assigned', "You were assigned candidate: {$candidate->name}", $connection, "/candidates/{$candidate->id}");
+        // Only people who were not on this candidate before are told.
+        if ($added) {
+            foreach (User::on($connection)->whereIn('id', $added)->get() as $assignedUser) {
+                $this->notifications->notify($assignedUser, 'candidate_assigned', "You were assigned candidate: {$candidate->name}", $connection, "/candidates/{$candidate->id}");
+            }
         }
 
         return $candidate->fresh();

@@ -17,7 +17,9 @@ class CreateTaskRequest extends FormRequest
             // PRD Section 62 — 3 task types
             'type' => ['required', 'in:normal,assign_candidate,assign_job'],
             'title' => ['required', 'string', 'max:255'],
-            'assigned_user_id' => ['required', 'uuid'],
+            'assigned_user_id' => ['required_without:assigned_user_ids', 'uuid'],
+            'assigned_user_ids' => ['required_without:assigned_user_id', 'array', 'min:1'],
+            'assigned_user_ids.*' => ['uuid', 'distinct'],
             'candidate_id' => ['nullable', 'uuid', 'required_if:type,assign_candidate'],
             'job_id' => ['nullable', 'uuid', 'required_if:type,assign_job'],
             'due_date' => ['nullable', 'date'],

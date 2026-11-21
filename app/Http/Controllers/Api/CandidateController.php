@@ -16,6 +16,7 @@ use App\Models\PipelineStage;
 use App\Models\User;
 use App\Services\CandidateService;
 use App\Support\Roles;
+use App\Support\Assignees;
 use App\Support\CacheVersion;
 use Illuminate\Http\Request;
 use Illuminate\Support\Facades\Cache;
@@ -79,6 +80,7 @@ class CandidateController extends Controller
             ->visibleTo($user)
             ->with([
                 'assignedUser:id,name',
+                'assignees:id,name',
                 'applications' => fn ($q) => $q->orderByDesc('applied_at'),
                 'applications.job:id,title',
                 'applications.stage:id,name',
@@ -115,9 +117,9 @@ class CandidateController extends Controller
         }
 
         if ($assignedTo === 'unassigned') {
-            $query->whereNull('assigned_user_id');
+            $query->unassigned();
         } elseif ($assignedTo) {
-            $query->where('assigned_user_id', $assignedTo);
+            $query->assignedTo($assignedTo);
         }
 
         // "New applicants": added, or applied to a job, on/after this moment (the Dashboard's 7-day count).
@@ -182,7 +184,7 @@ class CandidateController extends Controller
     {
         $user = $request->user();
         $connection = $user->getConnectionName();
-        $candidate = Candidate::on($connection)->with(['assignedUser:id,name', 'applications.job:id,title', 'applications.stage'])->find($id);
+        $candidate = Candidate::on($connection)->with(['assignedUser:id,name', 'assignees:id,name', 'applications.job:id,title', 'applications.stage'])->find($id);
 
         if (!$candidate) {
             return response()->json(['message' => 'Candidate not found.'], 404);
@@ -382,16 +384,15 @@ class CandidateController extends Controller
             return response()->json(['message' => 'You do not have permission to reassign this candidate.'], 403);
         }
 
-        $targetUserId = $request->validated()['assigned_user_id'];
-        $targetUser = User::on($connection)->where('company_id', $user->company_id)->find($targetUserId);
+        $assigneeIds = Assignees::idsFrom($request->validated());
 
-        if (!$targetUser) {
+        if (!Assignees::inCompany($connection, $user->company_id, $assigneeIds)) {
             return response()->json(['message' => 'That user was not found in your company.'], 422);
         }
 
-        $candidate = $this->candidates->assign($candidate, $targetUserId, $user, $connection);
+        $candidate = $this->candidates->assign($candidate, $assigneeIds, $user, $connection);
 
-        return response()->json(['candidate' => $candidate]);
+        return response()->json(['candidate' => $candidate->load(['assignedUser:id,name', 'assignees:id,name'])]);
     }
 
     /**
@@ -409,9 +410,10 @@ class CandidateController extends Controller
         $ability = ['archive' => 'archive', 'restore' => 'archive', 'assign' => 'assign', 'delete' => 'delete'][$action];
         $verb = ['archive' => 'archive', 'restore' => 'restore', 'assign' => 'reassign', 'delete' => 'delete'][$action];
 
+        $assigneeIds = [];
         if ($action === 'assign') {
-            $target = User::on($connection)->where('company_id', $user->company_id)->find($data['assigned_user_id']);
-            if (!$target) {
+            $assigneeIds = Assignees::idsFrom($data);
+            if (!$assigneeIds || !Assignees::inCompany($connection, $user->company_id, $assigneeIds)) {
                 return response()->json(['message' => 'That user was not found in your company.'], 422);
             }
         }
@@ -434,7 +436,7 @@ class CandidateController extends Controller
                 match ($action) {
                     'archive' => $this->candidates->archive($candidate, $user, $connection),
                     'restore' => $this->candidates->restore($candidate, $user, $connection),
-                    'assign' => $this->candidates->assign($candidate, $data['assigned_user_id'], $user, $connection),
+                    'assign' => $this->candidates->assign($candidate, $assigneeIds, $user, $connection),
                     'delete' => $this->candidates->softDelete($candidate, $user, $connection),
                 };
                 $succeeded++;
