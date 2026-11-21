@@ -538,7 +538,7 @@ class CandidateController extends Controller
     }
 
     /**
-     * The PDF itself (not a storage link), for the in-page resume preview. The browser asks for it
+     * The PDF / Word (.docx) file itself (not a storage link), for the in-page resume preview. The browser asks for it
      * through the API, so the usual candidate permissions apply and no storage CORS setup is needed.
      */
     public function resumeFile(Request $request, string $id)
@@ -559,8 +559,13 @@ class CandidateController extends Controller
             return response()->json(['message' => 'This candidate has no resume on file.'], 404);
         }
 
-        if (strtolower(pathinfo((string) $candidate->resume_original_name, PATHINFO_EXTENSION)) !== 'pdf') {
-            return response()->json(['message' => 'Preview is available for PDF resumes only.'], 422);
+        $extension = strtolower(pathinfo((string) $candidate->resume_original_name, PATHINFO_EXTENSION));
+        $contentTypes = [
+            'pdf' => 'application/pdf',
+            'docx' => 'application/vnd.openxmlformats-officedocument.wordprocessingml.document',
+        ];
+        if (!isset($contentTypes[$extension])) {
+            return response()->json(['message' => 'Preview is available for PDF and Word (.docx) resumes only.'], 422);
         }
 
         try {
@@ -578,7 +583,7 @@ class CandidateController extends Controller
             fpassthru($stream);
             fclose($stream);
         }, 200, [
-            'Content-Type' => 'application/pdf',
+            'Content-Type' => $contentTypes[$extension],
             'Content-Disposition' => 'inline',
             'Cache-Control' => 'private, no-store',
             'X-Content-Type-Options' => 'nosniff',
