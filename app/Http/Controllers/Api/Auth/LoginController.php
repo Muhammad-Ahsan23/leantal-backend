@@ -13,6 +13,7 @@ use App\Services\RefreshTokenService;
 use App\Services\RegionResolver;
 use App\Services\RegionRoutingRepository;
 use Illuminate\Http\Request;
+use Illuminate\Support\Facades\Cache;
 use Illuminate\Support\Facades\DB;
 use Illuminate\Support\Facades\Hash;
 use Illuminate\Support\Facades\Log;
@@ -23,15 +24,20 @@ class LoginController extends Controller
 {
     protected const ACCESS_TOKEN_MINUTES = 15;
     protected const RESEND_COOLDOWN_SECONDS = 60;
-    protected const RESEND_MAX_PER_WINDOW = 5;     // per 10 minutes
+    protected const RESEND_MAX_PER_WINDOW = 1;     // ONE resend per login; the count starts again at the next password step
     protected const RESEND_WINDOW_MINUTES = 30;    // how long after the password step a resend is still allowed
+
+    // Wrong verification codes: the per-email counter fills after this many, and stays full until a new code is issued.
+    protected const OTP_VERIFY_MAX = 3;
+    protected const OTP_VERIFY_DECAY = 600;
 
     // Failed password attempts are counted three ways, and a login is refused when ANY of them is full:
     //  - this email from this IP     (stops guessing one account from one machine)
     //  - this email from anywhere    (stops guessing one account from many machines; higher, so a stranger cannot lock you out quickly)
     //  - this IP across all emails   (stops one machine trying many accounts - credential stuffing; generous, an office shares one IP)
-    protected const LOGIN_PAIR_MAX = 5;            // per 60 seconds
-    protected const LOGIN_PAIR_DECAY = 60;
+    protected const LOGIN_PAIR_MAX = 3;            // the 3rd wrong password locks this email + IP for LOGIN_LOCK_SECONDS
+    protected const LOGIN_PAIR_DECAY = 900;
+    protected const LOGIN_LOCK_SECONDS = 900;      // 15 minutes, counted from the 3rd wrong password
     protected const LOGIN_EMAIL_MAX = 20;          // per 15 minutes
     protected const LOGIN_EMAIL_DECAY = 900;
     protected const LOGIN_IP_MAX = 30;             // per 10 minutes
@@ -44,10 +50,30 @@ class LoginController extends Controller
         protected RefreshTokenService $refreshTokens,
     ) {}
 
-    /** Seconds until a login may be tried again, or 0 when none of the three limits is full. */
+    protected function lockKey(string $pairKey): string
+    {
+        return 'lock:'.$pairKey;
+    }
+
+    /** "15 minutes" / "1 minute", rounded UP so the user is never told to retry too early. */
+    protected function waitText(int $seconds): string
+    {
+        $minutes = max(1, (int) ceil($seconds / 60));
+
+        return $minutes.' '.($minutes === 1 ? 'minute' : 'minutes');
+    }
+
+    /** Seconds until a login may be tried again, or 0 when none of the limits is full. */
     protected function loginLockedFor(string $pairKey, string $emailKey, string $ipKey): int
     {
         $wait = 0;
+
+        // The 3-wrong-passwords lock for this email + IP.
+        $lockedUntil = (int) Cache::get($this->lockKey($pairKey), 0);
+        if ($lockedUntil > time()) {
+            $wait = $lockedUntil - time();
+        }
+
         foreach ([[$pairKey, self::LOGIN_PAIR_MAX], [$emailKey, self::LOGIN_EMAIL_MAX], [$ipKey, self::LOGIN_IP_MAX]] as [$key, $max]) {
             if (RateLimiter::tooManyAttempts($key, $max)) {
                 $wait = max($wait, RateLimiter::availableIn($key));
@@ -62,6 +88,12 @@ class LoginController extends Controller
         RateLimiter::hit($pairKey, self::LOGIN_PAIR_DECAY);
         RateLimiter::hit($emailKey, self::LOGIN_EMAIL_DECAY);
         RateLimiter::hit($ipKey, self::LOGIN_IP_DECAY);
+
+        // The 3rd wrong password starts a full 15-minute lock (not "what is left of a window that began at the 1st").
+        if (RateLimiter::attempts($pairKey) >= self::LOGIN_PAIR_MAX) {
+            Cache::put($this->lockKey($pairKey), time() + self::LOGIN_LOCK_SECONDS, self::LOGIN_LOCK_SECONDS);
+            RateLimiter::clear($pairKey);
+        }
     }
 
     /**
@@ -80,7 +112,7 @@ class LoginController extends Controller
         $wait = $this->loginLockedFor($pairKey, $emailKey, $ipKey);
         if ($wait > 0) {
             return response()->json([
-                'message' => 'Too many login attempts. Please try again in '.($wait > 90 ? 'a few minutes' : 'a minute').'.',
+                'message' => 'Too many login attempts. Please try again in '.$this->waitText($wait).'.',
                 'retry_after' => $wait,
             ], 429)->header('Retry-After', (string) $wait);
         }
@@ -133,6 +165,11 @@ class LoginController extends Controller
         RateLimiter::clear($pairKey);
         RateLimiter::clear($emailKey);
 
+        // A fresh password step starts a fresh verification: one new "Resend code" and a clean wrong-code count.
+        RateLimiter::clear('otp-resend:'.$email);
+        RateLimiter::clear('otp-resend-window:'.$email);
+        RateLimiter::clear('otp:'.$email);
+
         $otpSendKey = 'otp-send:'.$email;
         if (RateLimiter::tooManyAttempts($otpSendKey, 3)) {
             return response()->json([
@@ -175,19 +212,20 @@ class LoginController extends Controller
         $windowKey = 'otp-resend-window:'.$email;
         if (RateLimiter::tooManyAttempts($windowKey, self::RESEND_MAX_PER_WINDOW)) {
             return response()->json([
-                'message' => 'Too many codes requested. Please log in again in a few minutes.',
-                'retry_after' => RateLimiter::availableIn($windowKey),
+                'message' => 'No more codes can be sent for this login. Please log in again.',
+                'resends_left' => 0,
             ], 429);
         }
 
         // Count every attempt (even for unknown emails) so this cannot be used to probe or to spam.
         RateLimiter::hit($cooldownKey, self::RESEND_COOLDOWN_SECONDS);
-        RateLimiter::hit($windowKey, 600);
+        RateLimiter::hit($windowKey, self::RESEND_WINDOW_MINUTES * 60);
 
         $response = response()->json([
             'message' => 'If a verification is pending for this email, a new code has been sent.',
             'cooldown_seconds' => self::RESEND_COOLDOWN_SECONDS,
             'expires_in_seconds' => OtpService::EXPIRY_MINUTES * 60,
+            'resends_left' => max(0, self::RESEND_MAX_PER_WINDOW - RateLimiter::attempts($windowKey)),
         ]);
 
         $region = $this->routing->findRegionByEmail($email);
@@ -210,6 +248,8 @@ class LoginController extends Controller
             return $response;
         }
 
+        // The new code starts with a clean wrong-code count.
+        RateLimiter::clear('otp:'.$email);
         $this->sendOtpMail($email, $this->otp->generate($user, $connection));
 
         return $response;
@@ -233,7 +273,7 @@ class LoginController extends Controller
         $email = strtolower(trim($request->input('email')));
 
         $throttleKey = 'otp:'.$email;
-        if (RateLimiter::tooManyAttempts($throttleKey, 5)) {
+        if (RateLimiter::tooManyAttempts($throttleKey, self::OTP_VERIFY_MAX)) {
             return response()->json([
                 'message' => 'Too many attempts. Please request a new code.',
             ], 429);
@@ -241,7 +281,7 @@ class LoginController extends Controller
 
         $region = $this->routing->findRegionByEmail($email);
         if (!$region) {
-            RateLimiter::hit($throttleKey, 60);
+            RateLimiter::hit($throttleKey, self::OTP_VERIFY_DECAY);
             return $this->invalidOtp();
         }
 
@@ -249,12 +289,12 @@ class LoginController extends Controller
         $user = User::on($connection)->where('email', $email)->first();
 
         if (!$user || $user->status !== 'active') {
-            RateLimiter::hit($throttleKey, 60);
+            RateLimiter::hit($throttleKey, self::OTP_VERIFY_DECAY);
             return $this->invalidOtp();
         }
 
         if (!$this->otp->verify($user, $connection, $request->input('otp'))) {
-            RateLimiter::hit($throttleKey, 60);
+            RateLimiter::hit($throttleKey, self::OTP_VERIFY_DECAY);
             return $this->invalidOtp();
         }
 

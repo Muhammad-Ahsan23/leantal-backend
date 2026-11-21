@@ -10,7 +10,7 @@ use Illuminate\Support\Str;
 class OtpService
 {
     public const EXPIRY_MINUTES = 10;   // PRD Section 15
-    protected const MAX_ATTEMPTS = 5;      // "Limit incorrect OTP attempts"
+    protected const MAX_ATTEMPTS = 3;      // "Limit incorrect OTP attempts" - same 3 as the candidate apply code
 
     /**
      * Generates a fresh 6-digit code, stores its hash (never the raw code),
