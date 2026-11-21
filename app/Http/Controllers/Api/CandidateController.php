@@ -500,8 +500,39 @@ class CandidateController extends Controller
             return response()->json(['message' => 'This candidate has no resume on file.'], 404);
         }
 
-        $url = \Illuminate\Support\Facades\Storage::disk($candidate->resume_disk)
-            ->temporaryUrl($candidate->resume_path, now()->addMinutes(10));
+        $disk = \Illuminate\Support\Facades\Storage::disk($candidate->resume_disk);
+
+        // If the file is missing from storage, say so cleanly instead of letting the
+        // browser show a raw storage error page. A failed check never blocks the link.
+        try {
+            if (!$disk->exists($candidate->resume_path)) {
+                return response()->json(['message' => 'The resume file could not be found. Please upload it again.'], 404);
+            }
+        } catch (\Throwable $e) {
+            \Illuminate\Support\Facades\Log::warning('Resume existence check failed', ['candidate_id' => $candidate->id, 'error' => $e->getMessage()]);
+        }
+
+        // ?inline=1 -> a PDF the browser renders in place (in-page preview).
+        // Otherwise the file is sent as an attachment, so it downloads without leaving the page.
+        $original = (string) ($candidate->resume_original_name ?: 'resume');
+        $asciiName = addcslashes(preg_replace('/[^\x20-\x7E]/', '_', $original), '"\\');
+        $filenameParams = 'filename="'.$asciiName.'"; filename*=UTF-8\'\''.rawurlencode($original);
+
+        if ($request->boolean('inline') && strtolower(pathinfo($original, PATHINFO_EXTENSION)) === 'pdf') {
+            $options = [
+                'ResponseContentType' => 'application/pdf',
+                'ResponseContentDisposition' => 'inline; '.$filenameParams,
+            ];
+        } else {
+            $options = ['ResponseContentDisposition' => 'attachment; '.$filenameParams];
+        }
+
+        try {
+            $url = $disk->temporaryUrl($candidate->resume_path, now()->addMinutes(10), $options);
+        } catch (\Throwable $e) {
+            \Illuminate\Support\Facades\Log::error('Resume link failed', ['candidate_id' => $candidate->id, 'error' => $e->getMessage()]);
+            return response()->json(['message' => 'The resume could not be opened right now. Please try again.'], 500);
+        }
 
         return response()->json(['url' => $url, 'filename' => $candidate->resume_original_name]);
     }
