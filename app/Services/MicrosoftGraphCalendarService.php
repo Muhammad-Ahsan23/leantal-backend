@@ -4,6 +4,7 @@ namespace App\Services;
 
 use App\Models\OAuthToken;
 use Illuminate\Support\Facades\Http;
+use Illuminate\Support\Facades\Log;
 
 /**
  * PRD Section 60-61 — "Outlook Calendar & Microsoft Teams... creating
@@ -65,10 +66,22 @@ class MicrosoftGraphCalendarService
         }
 
         $json = $response->json();
+        $joinUrl = $json['onlineMeeting']['joinUrl'] ?? null;
+
+        // Microsoft accepts the request but adds no Teams link for personal accounts (outlook.com / hotmail.com / live.com):
+        // onlineMeeting stays null. Nothing throws, so without this line the cause would never show up in the log.
+        if (!$joinUrl) {
+            Log::warning('Microsoft Calendar event created without a Teams link', [
+                'event_id' => $json['id'] ?? null,
+                'isOnlineMeeting' => $json['isOnlineMeeting'] ?? null,
+                'onlineMeetingProvider' => $json['onlineMeetingProvider'] ?? null,
+                'hint' => 'Teams links need a work or school Microsoft account; personal Outlook accounts do not get one.',
+            ]);
+        }
 
         return [
             'event_id' => $json['id'],
-            'meeting_url' => $json['onlineMeeting']['joinUrl'] ?? null,
+            'meeting_url' => $joinUrl,
         ];
     }
 
