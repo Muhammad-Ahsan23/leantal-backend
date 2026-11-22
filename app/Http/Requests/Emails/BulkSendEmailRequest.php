@@ -19,8 +19,9 @@ class BulkSendEmailRequest extends FormRequest
         return [
             'application_ids' => ['required', 'array', 'min:1', 'max:'.self::MAX_IDS],
             'application_ids.*' => ['required', 'uuid', 'distinct'],
-            // Bulk email is always sent from the acting user's own connected Gmail/Outlook (send_personal). There is no system-address option.
-            'mode' => ['required', 'in:send_personal'],
+            // send_personal = the acting user's own connected Gmail/Outlook (normal bulk email).
+            // send_system   = LeanTal's no-reply address (PRD Section 55: rejection emails), same as the single rejection email.
+            'mode' => ['required', 'in:send_personal,send_system'],
             'template_id' => ['nullable', 'uuid'],
             'subject' => ['nullable', 'string', 'max:255', 'required_without:template_id'],
             'body' => ['nullable', 'string', 'max:10000', 'required_without:template_id'],
