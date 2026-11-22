@@ -17,9 +17,9 @@ use Illuminate\Http\Request;
  * read another user's mail through this API.
  *
  * What the Inbox contains: replies from CANDIDATES that the user's connected
- * Gmail/Outlook received (the sync only stores mail from known candidates, by
- * design — PRD Section 57 "linked to the candidate record"). It is not a mirror of
- * the user's whole mailbox. Sent = what the user sent or logged from LeanTal.
+ * Gmail/Outlook received, plus replies from people the user themselves composed an
+ * email to (the sync stores nothing else, by design — PRD Section 57 "linked to the
+ * candidate record"). It is not a mirror of the user's whole mailbox. Sent = what the user sent or logged from LeanTal.
  * Templates already exist (Settings -> Email). Drafts are not built yet.
  */
 class InboxController extends Controller
@@ -50,6 +50,7 @@ class InboxController extends Controller
                 $q->where('subject', 'ilike', $like)
                     ->orWhere('body', 'ilike', $like)
                     ->orWhereRaw('to_emails::text ilike ?', [$like])
+                    ->orWhere('from_email', 'ilike', $like)
                     ->orWhereHas('candidate', fn ($c) => $c->where('name', 'ilike', $like)->orWhere('email', 'ilike', $like));
             });
         }
@@ -67,6 +68,8 @@ class InboxController extends Controller
             'sent_at' => $e->sent_at,
             // Who a composed email went to (null for mail in a candidate's thread) and how many files it carried.
             'to' => collect($e->to_emails ?? [])->pluck('email')->values(),
+            // Who a received email came from (set for replies from people who are not candidates).
+            'from' => $e->from_email,
             'attachment_count' => count($e->attachments ?? []),
             'is_read' => $e->direction === 'outbound' || $e->read_at !== null,
             'candidate' => $e->candidate
@@ -96,6 +99,11 @@ class InboxController extends Controller
             return response()->json(['message' => 'Email not found.'], 404);
         }
 
+        // Opening a received email reads it (a reply from a non-candidate has no conversation view that would do it).
+        if ($email->direction === 'inbound' && $email->read_at === null) {
+            $email->update(['read_at' => now()]);
+        }
+
         $parts = EmailText::split($email->body);
 
         return response()->json(['email' => [
@@ -107,6 +115,7 @@ class InboxController extends Controller
             'quoted_text' => $parts['quoted'],
             'sent_at' => $email->sent_at,
             'to' => collect($email->to_emails ?? [])->pluck('email')->values(),
+            'from' => $email->from_email,
             'attachments' => $email->attachments ?? [],
             'candidate' => $email->candidate ? ['id' => $email->candidate->id, 'name' => $email->candidate->name, 'email' => $email->candidate->email] : null,
         ]]);

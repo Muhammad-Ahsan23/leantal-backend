@@ -18,7 +18,8 @@ use Illuminate\Support\Facades\Log;
  * changed, we can fetch the message immediately.
  *
  * Same deliberate scope limit as Gmail sync — only messages from a
- * sender matching an EXISTING Candidate are stored.
+ * sender matching an EXISTING Candidate, or from an address this user
+ * earlier composed an email to (a reply to Compose), are stored.
  */
 class MicrosoftGraphSyncService
 {
@@ -70,8 +71,10 @@ class MicrosoftGraphSyncService
             ->whereRaw('LOWER(email) = ?', [strtolower($senderEmail)])
             ->first();
 
-        if (!$candidate) {
-            return; // not from a known candidate — out of scope
+        // Not a candidate: still ours to keep if this user earlier composed an email to that exact
+        // address (a reply to Compose). Anyone else stays out of scope.
+        if (!$candidate && !Email::wasComposedTo($connection, $ownerUser->company_id, $token->user_id, $senderEmail)) {
+            return;
         }
 
         // conversationId is Graph's equivalent of Gmail's threadId.
@@ -79,7 +82,8 @@ class MicrosoftGraphSyncService
         $sentAt = isset($message['receivedDateTime']) ? \Carbon\Carbon::parse($message['receivedDateTime']) : now();
 
         $alreadyStored = Email::on($connection)
-            ->where('candidate_id', $candidate->id)
+            ->where('candidate_id', $candidate?->id)
+            ->when(!$candidate, fn ($q) => $q->where('user_id', $token->user_id)->where('direction', 'inbound'))
             ->where('thread_id', $threadId)
             ->where('subject', $subject)
             ->where('sent_at', $sentAt)
@@ -94,7 +98,8 @@ class MicrosoftGraphSyncService
         Email::on($connection)->create([
             'company_id' => $ownerUser->company_id,
             'user_id' => $token->user_id,
-            'candidate_id' => $candidate->id,
+            'candidate_id' => $candidate?->id,
+            'from_email' => strtolower($senderEmail),
             'direction' => 'inbound',
             'provider' => 'outlook',
             'thread_id' => $threadId,

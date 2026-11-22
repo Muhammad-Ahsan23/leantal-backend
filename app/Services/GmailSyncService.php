@@ -14,9 +14,10 @@ use Illuminate\Support\Facades\Log;
  * conversation context linked to the candidate record."
  *
  * Deliberately narrow scope: only messages from a sender whose email
- * matches an EXISTING Candidate (in the connected user's own company)
- * are stored. This is not a general inbox sync — we have no business
- * reading or storing someone's personal, non-candidate email, and PRD
+ * matches an EXISTING Candidate (in the connected user's own company),
+ * or from an address this same user earlier composed an email to (a
+ * reply to Compose), are stored. This is not a general inbox sync — we
+ * have no business reading or storing someone's personal email, and PRD
  * never asks us to. Everything else in the mailbox is left untouched.
  */
 class GmailSyncService
@@ -128,14 +129,17 @@ class GmailSyncService
             ->whereRaw('LOWER(email) = ?', [strtolower($senderEmail)])
             ->first();
 
-        if (!$candidate) {
-            return; // not from a known candidate — out of scope, skip entirely
+        // Not a candidate: still ours to keep if this user earlier composed an email to that exact
+        // address (a reply to Compose). Anyone else stays out of scope, skipped entirely.
+        if (!$candidate && !Email::wasComposedTo($connection, $ownerUser->company_id, $token->user_id, $senderEmail)) {
+            return;
         }
 
         // Avoid duplicate storage if this exact Gmail message was
         // somehow already processed (e.g. a retried Pub/Sub delivery).
         $alreadyStored = Email::on($connection)
-            ->where('candidate_id', $candidate->id)
+            ->where('candidate_id', $candidate?->id)
+            ->when(!$candidate, fn ($q) => $q->where('user_id', $token->user_id)->where('direction', 'inbound'))
             ->where('thread_id', $message['threadId'] ?? null)
             ->where('subject', $subject)
             ->where('sent_at', now()->createFromTimestampMs((int) $message['internalDate']))
@@ -150,7 +154,8 @@ class GmailSyncService
         Email::on($connection)->create([
             'company_id' => $ownerUser->company_id,
             'user_id' => $token->user_id,
-            'candidate_id' => $candidate->id,
+            'candidate_id' => $candidate?->id,
+            'from_email' => strtolower($senderEmail),
             'direction' => 'inbound',
             'provider' => 'gmail',
             'thread_id' => $message['threadId'] ?? null,
