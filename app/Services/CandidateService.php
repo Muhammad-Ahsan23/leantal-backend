@@ -360,6 +360,8 @@ class CandidateService
         $candidate->delete(); // SoftDeletes trait — sets deleted_at, doesn't hard-remove the row
 
         $this->forgetCandidatesCache($candidate->company_id);
+        // The jobs list shows applicant counts (cached for a minute), and this candidate no longer counts.
+        CacheVersion::bump("company:{$candidate->company_id}:jobs");
     }
 
     /**

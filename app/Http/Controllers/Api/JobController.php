@@ -92,10 +92,13 @@ class JobController extends Controller
 
             // PRD Section 21 — "Applicant count" column. Single grouped
             // query (not one-per-job) to avoid N+1 as the jobs list grows.
-            $counts = DB::connection($connection)->table('applications')
-                ->select('job_id', DB::raw('count(*) as cnt'))
-                ->whereIn('job_id', $jobs->pluck('id'))
-                ->groupBy('job_id')
+            // Applications of deleted candidates are not counted (the board does not show them either).
+            $counts = DB::connection($connection)->table('applications as a')
+                ->join('candidates as c', 'c.id', '=', 'a.candidate_id')
+                ->whereNull('c.deleted_at')
+                ->select('a.job_id', DB::raw('count(*) as cnt'))
+                ->whereIn('a.job_id', $jobs->pluck('id'))
+                ->groupBy('a.job_id')
                 ->pluck('cnt', 'job_id');
 
             $jobs->each(fn ($job) => $job->applicants_count = $counts[$job->id] ?? 0);
@@ -151,7 +154,11 @@ class JobController extends Controller
             return response()->json(['message' => 'You do not have permission to view this job.'], 403);
         }
 
-        $job->applicants_count = DB::connection($connection)->table('applications')->where('job_id', $job->id)->count();
+        $job->applicants_count = DB::connection($connection)->table('applications as a')
+            ->join('candidates as c', 'c.id', '=', 'a.candidate_id')
+            ->whereNull('c.deleted_at')
+            ->where('a.job_id', $job->id)
+            ->count();
 
         return response()->json(['job' => $job]);
     }
