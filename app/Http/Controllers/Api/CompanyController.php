@@ -53,11 +53,16 @@ class CompanyController extends Controller
         $company = Company::on($connection)->find($user->company_id);
         $data = $request->validated();
 
-        if (isset($data['slug']) && $data['slug'] !== $company->slug) {
-            $slugTaken = Company::on($connection)->where('slug', $data['slug'])->where('id', '!=', $company->id)->exists();
-            if ($slugTaken) {
-                return response()->json(['message' => 'This careers slug is already taken.', 'errors' => ['slug' => ['Already taken.']]], 422);
+        // The careers page address (slug) is locked once the company exists: changing it would break every shared job
+        // link and the search-engine listings of its jobs. Sending the unchanged value is harmless; a different one is refused.
+        if (isset($data['slug'])) {
+            if ($data['slug'] !== $company->slug) {
+                return response()->json([
+                    'message' => 'The careers page address is locked and cannot be changed.',
+                    'errors' => ['slug' => ['Locked.']],
+                ], 422);
             }
+            unset($data['slug']);
         }
 
         $company->update($data);
