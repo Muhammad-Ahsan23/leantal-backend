@@ -2,9 +2,12 @@
 
 namespace App\Services;
 
+use App\Models\Notification;
+use App\Models\NotificationPreference;
 use App\Models\Task;
 use App\Models\User;
 use App\Support\Assignees;
+use Illuminate\Support\Collection;
 use Illuminate\Support\Facades\DB;
 use Illuminate\Support\Str;
 
@@ -51,6 +54,116 @@ class TaskService
         }
 
         return $task;
+    }
+
+    /**
+     * One task for each of several candidates, all with the same title, assignees, due date and notes.
+     *
+     * Built for volume: a fixed handful of queries however many candidates there are (tasks, assignee rows and
+     * activity rows are each ONE insert, notifications one per person), all inside a single transaction so either
+     * every task is created or none is. Each assignee gets ONE notification for the whole batch, not one per task.
+     * The caller has already checked that the assignees and candidates belong to the company.
+     *
+     * @return Collection<int, Task> in the order the candidates were given
+     */
+    public function createForCandidates(array $data, array $candidateIds, User $creator, string $companyId, string $connection): Collection
+    {
+        $assigneeIds = Assignees::idsFrom($data);
+        $candidateIds = array_values(array_unique($candidateIds));
+        $now = now();
+
+        $taskRows = [];
+        $pivotRows = [];
+        $activityRows = [];
+        $taskIds = [];
+
+        foreach ($candidateIds as $candidateId) {
+            $id = (string) Str::uuid();
+            $taskIds[] = $id;
+
+            $taskRows[] = [
+                'id' => $id,
+                'company_id' => $companyId,
+                'type' => 'assign_candidate',
+                'title' => $data['title'],
+                'assigned_user_id' => $assigneeIds[0], // the primary assignee, as in create()
+                'created_by' => $creator->id,
+                'candidate_id' => $candidateId,
+                'job_id' => $data['job_id'] ?? null,
+                'due_date' => $data['due_date'] ?? null,
+                'status' => 'to_do',
+                'notes' => $data['notes'] ?? null,
+                'auto_generated' => false,
+                'created_at' => $now,
+                'updated_at' => $now,
+            ];
+
+            // Bulk inserts skip the model hook that adds the primary assignee's row, so every assignee row is written here.
+            foreach ($assigneeIds as $userId) {
+                $pivotRows[] = ['task_id' => $id, 'user_id' => $userId, 'created_at' => $now];
+            }
+
+            $activityRows[] = [
+                'id' => (string) Str::uuid(),
+                'company_id' => $companyId,
+                'actor_id' => $creator->id,
+                'action' => 'task.created',
+                'object_type' => 'task',
+                'object_id' => $id,
+                'metadata' => json_encode(['title' => $data['title'], 'assigned_to' => $assigneeIds[0], 'assigned_to_ids' => $assigneeIds, 'bulk' => true]),
+                'created_at' => $now,
+            ];
+        }
+
+        DB::connection($connection)->transaction(function () use ($connection, $taskRows, $pivotRows, $activityRows) {
+            DB::connection($connection)->table('tasks')->insert($taskRows);
+            DB::connection($connection)->table('task_assignees')->insert($pivotRows);
+            DB::connection($connection)->table('activity')->insert($activityRows);
+        });
+
+        $this->notifyBatch($assigneeIds, $data['title'], $taskIds, $companyId, $connection, $now);
+
+        $order = array_flip($taskIds);
+
+        return Task::on($connection)
+            ->whereIn('id', $taskIds)
+            ->with(['assignedUser:id,name', 'assignees:id,name', 'candidate:id,name', 'job:id,title'])
+            ->get()
+            ->sortBy(fn (Task $task) => $order[$task->id])
+            ->values();
+    }
+
+    /** One "task assigned" notification per person for a whole batch, skipping people who switched that type off. */
+    protected function notifyBatch(array $userIds, string $title, array $taskIds, string $companyId, string $connection, $now): void
+    {
+        $muted = NotificationPreference::on($connection)
+            ->whereIn('user_id', $userIds)
+            ->where('notification_type', 'task_assigned')
+            ->where('channel', 'in_app')
+            ->where('enabled', false)
+            ->pluck('user_id')
+            ->all();
+
+        $count = count($taskIds);
+        $message = $count === 1 ? "You were assigned a task: {$title}" : "You were assigned {$count} tasks: {$title}";
+        $link = $count === 1 ? "/tasks/{$taskIds[0]}" : '/tasks';
+
+        $rows = [];
+        foreach (array_diff($userIds, $muted) as $userId) {
+            $rows[] = [
+                'id' => (string) Str::uuid(),
+                'company_id' => $companyId,
+                'user_id' => $userId,
+                'type' => 'task_assigned',
+                'message' => $message,
+                'link' => $link,
+                'created_at' => $now,
+            ];
+        }
+
+        if ($rows) {
+            Notification::on($connection)->insert($rows);
+        }
     }
 
     /** Edit details. Notifies the new assignee when the task is reassigned. */

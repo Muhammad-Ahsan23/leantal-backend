@@ -159,6 +159,19 @@ class TaskController extends Controller
             return response()->json(['message' => 'That user was not found in your company.'], 422);
         }
 
+        // Several candidates at once: one task each, created together (all or nothing).
+        if (!empty($data['candidate_ids'])) {
+            $candidateIds = array_values(array_unique($data['candidate_ids']));
+            $found = Candidate::on($connection)->where('company_id', $user->company_id)->whereIn('id', $candidateIds)->count();
+            if ($found !== count($candidateIds)) {
+                return response()->json(['message' => 'One or more of those candidates were not found in your company.'], 422);
+            }
+
+            $tasks = $this->tasks->createForCandidates($data, $candidateIds, $user, $user->company_id, $connection);
+
+            return response()->json(['tasks' => $tasks, 'count' => $tasks->count()], 201);
+        }
+
         if (!empty($data['candidate_id'])) {
             $candidate = Candidate::on($connection)->where('company_id', $user->company_id)->find($data['candidate_id']);
             if (!$candidate) {
